@@ -1,0 +1,356 @@
+import { PDFDocument, rgb, degrees } from 'pdf-lib';
+
+// Функция для сжатия PDF
+export async function compressPDF(file: File, compressionLevel: string): Promise<Blob> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  
+  // Определение настроек сжатия в зависимости от уровня
+  const compressionSettings = {
+    low: { quality: 0.8, maxWidth: 2400, maxHeight: 2400, useObjectStreams: true },
+    medium: { quality: 0.6, maxWidth: 1600, maxHeight: 1600, useObjectStreams: true },
+    high: { quality: 0.4, maxWidth: 1200, maxHeight: 1200, useObjectStreams: true },
+  };
+  
+  const settings = compressionSettings[compressionLevel as keyof typeof compressionSettings] || compressionSettings.medium;
+  
+  // Создание нового PDF с оптимизацией
+  const newPdfDoc = await PDFDocument.create();
+  
+  // Копирование страниц
+  for (let i = 0; i < pdfDoc.getPageCount(); i++) {
+    const [existingPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
+    newPdfDoc.addPage(existingPage);
+  }
+  
+  // Если нужно сжать изображения, используем метод с пересозданием PDF через canvas
+  if (compressionLevel !== 'low') {
+    return await compressPDFWithImages(file, settings);
+  }
+  
+  // Сохранение с сжатием объектов в потоки
+  const compressedPdfBytes = await newPdfDoc.save({
+    useObjectStreams: settings.useObjectStreams,
+    addDefaultPage: false,
+    objectsPerTick: 50,
+    updateFieldAppearances: true,
+  });
+  
+  return new Blob([new Uint8Array(compressedPdfBytes)], { type: 'application/pdf' });
+}
+
+// Вспомогательная функция для сжатия PDF с пересозданием через изображения
+async function compressPDFWithImages(file: File, settings: { quality: number; maxWidth: number; maxHeight: number; useObjectStreams: boolean }): Promise<Blob> {
+  if (typeof window === 'undefined') {
+    throw new Error('Сжатие изображений доступно только в браузере');
+  }
+  
+  const arrayBuffer = await file.arrayBuffer();
+  
+  // Динамический импорт pdf.js для избежания проблем SSR
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
+  
+  // Загружаем PDF с помощью pdf.js
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  
+  const newPdfDoc = await PDFDocument.create();
+  
+  for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    const page = await pdf.getPage(pageNum);
+    const viewport = page.getViewport({ scale: 1 });
+    
+    // Ограничиваем размер если нужно
+    let finalWidth = viewport.width;
+    let finalHeight = viewport.height;
+    
+    if (finalWidth > settings.maxWidth || finalHeight > settings.maxHeight) {
+      const scale = Math.min(
+        settings.maxWidth / finalWidth,
+        settings.maxHeight / finalHeight
+      );
+      finalWidth *= scale;
+      finalHeight *= scale;
+    }
+    
+    // Создаем canvas для рендеринга страницы
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    
+    if (!ctx) {
+      continue;
+    }
+    
+    canvas.width = finalWidth;
+    canvas.height = finalHeight;
+    
+    // Рендерим страницу PDF на canvas
+    await page.render({
+      canvasContext: ctx,
+      viewport: page.getViewport({ scale: finalWidth / viewport.width }),
+      canvas: canvas,
+    }).promise;
+    
+    // Конвертируем в JPEG с сжатием
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, 'image/jpeg', settings.quality);
+    });
+    
+    if (blob) {
+      const image = await newPdfDoc.embedJpg(await blob.arrayBuffer());
+      const page = newPdfDoc.addPage([finalWidth, finalHeight]);
+      page.drawImage(image, {
+        x: 0,
+        y: 0,
+        width: finalWidth,
+        height: finalHeight,
+      });
+    }
+  }
+  
+  const compressedPdfBytes = await newPdfDoc.save({
+    useObjectStreams: settings.useObjectStreams,
+    addDefaultPage: false,
+    objectsPerTick: 50,
+    updateFieldAppearances: true,
+  });
+  
+  return new Blob([new Uint8Array(compressedPdfBytes)], { type: 'application/pdf' });
+}
+
+// Функция для конвертации PDF в изображения с использованием pdf.js
+export async function convertPDFToImages(file: File, format: string): Promise<Blob[]> {
+  const images: Blob[] = [];
+  
+  // Проверяем, что мы на клиенте (не на сервере)
+  if (typeof window === 'undefined') {
+    return images;
+  }
+  
+  try {
+    // Динамический импорт pdf.js для избежания проблем SSR
+    const pdfjsLib = await import('pdfjs-dist');
+    
+    // Устанавливаем worker для pdf.js (ESM версия)
+    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
+    
+    const arrayBuffer = await file.arrayBuffer();
+    
+    // Загружаем PDF с помощью pdf.js
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    
+    // Обрабатываем каждую страницу
+    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 2 }); // Масштаб 2 для лучшего качества
+      
+      // Создаем canvas для рендеринга страницы
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      if (!ctx) {
+        continue;
+      }
+      
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      
+      // Рендерим страницу PDF на canvas
+      await page.render({
+        canvasContext: ctx,
+        viewport: viewport,
+        canvas: canvas,
+      }).promise;
+      
+      // Конвертируем в нужный формат
+      const blobPromise = new Promise<Blob | null>((resolve) => {
+        if (format === 'JPG') {
+          canvas.toBlob(resolve, 'image/jpeg', 0.9);
+        } else {
+          canvas.toBlob(resolve, 'image/png');
+        }
+      });
+      
+      const blob = await blobPromise;
+      if (blob) {
+        images.push(blob);
+      }
+    }
+  } catch (error) {
+    console.error('Ошибка при конвертации PDF в изображения:', error);
+    throw error;
+  }
+  
+  return images;
+}
+
+// Функция для создания ZIP архива из изображений
+export async function createZipFromImages(images: {blob: Blob, name: string}[]): Promise<Blob> {
+  // Динамический импорт JSZip для избежания проблем SSR
+  const JSZip = (await import('jszip')).default;
+  
+  const zip = new JSZip();
+  
+  for (const image of images) {
+    const arrayBuffer = await image.blob.arrayBuffer();
+    zip.file(image.name, arrayBuffer);
+  }
+  
+  const zipBlob = await zip.generateAsync({ type: 'blob' });
+  return zipBlob;
+}
+
+// Конвертация WebP в PNG через canvas (для pdf-lib, который не поддерживает WebP)
+async function convertWebPToPng(arrayBuffer: ArrayBuffer): Promise<Blob> {
+  const blob = new Blob([arrayBuffer], { type: 'image/webp' });
+  const bitmap = await createImageBitmap(blob);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas context not available');
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Conversion failed'))), 'image/png');
+  });
+}
+
+// Функция для конвертации изображений в PDF
+export async function convertImagesToPDF(files: File[]): Promise<Blob> {
+  const newPdfDoc = await PDFDocument.create();
+  
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) {
+      continue; // Пропускаем не изображения
+    }
+    
+    const arrayBuffer = await file.arrayBuffer();
+    
+    let image;
+    try {
+      // Пытаемся встроить как JPEG
+      image = await newPdfDoc.embedJpg(arrayBuffer);
+    } catch {
+      try {
+        // Если не удалось, пробуем как PNG
+        image = await newPdfDoc.embedPng(arrayBuffer);
+      } catch {
+        try {
+          // Поддержка WebP через canvas (браузер)
+          if (typeof window !== 'undefined' && file.type === 'image/webp') {
+            const pngBlob = await convertWebPToPng(arrayBuffer);
+            image = await newPdfDoc.embedPng(await pngBlob.arrayBuffer());
+          } else {
+            throw new Error('Unsupported format');
+          }
+        } catch {
+          console.warn(`Не удалось обработать изображение: ${file.name}. Формат не поддерживается или файл поврежден.`);
+          continue;
+        }
+      }
+    }
+    
+    // Создаем новую страницу с размерами, соответствующими изображению
+    const page = newPdfDoc.addPage([image.width, image.height]);
+    
+    // Добавляем изображение на всю страницу
+    page.drawImage(image, {
+      x: 0,
+      y: 0,
+      width: image.width,
+      height: image.height,
+    });
+  }
+  
+  const pdfBytes = await newPdfDoc.save();
+  return new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
+}
+
+// Функция для редактирования PDF (добавление водяного знака)
+export async function addWatermark(file: File, watermarkText: string): Promise<Blob> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  
+  const pages = pdfDoc.getPages();
+  const fontSize = 50;
+  // Приблизительная ширина текста (примерно 0.6 * fontSize на символ)
+  const textWidth = watermarkText.length * fontSize * 0.6;
+
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    const { width, height } = page.getSize();
+
+    page.drawText(watermarkText, {
+      x: width / 2 - textWidth / 2,
+      y: height / 2 - fontSize / 2,
+      size: fontSize,
+      color: rgb(0.75, 0.75, 0.75),
+      opacity: 0.4,
+      rotate: degrees(-45),
+    });
+  }
+  
+  const modifiedPdfBytes = await pdfDoc.save();
+  return new Blob([new Uint8Array(modifiedPdfBytes)], { type: 'application/pdf' });
+}
+
+// Функция для объединения PDF
+export async function mergePDFs(files: File[]): Promise<Blob> {
+  const newPdfDoc = await PDFDocument.create();
+  
+  for (const file of files) {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdfDoc = await PDFDocument.load(arrayBuffer);
+    const copiedPages = await newPdfDoc.copyPages(pdfDoc, pdfDoc.getPageIndices());
+    
+    copiedPages.forEach((page) => {
+      newPdfDoc.addPage(page);
+    });
+  }
+  
+  const mergedPdfBytes = await newPdfDoc.save();
+  return new Blob([new Uint8Array(mergedPdfBytes)], { type: 'application/pdf' });
+}
+
+// Функция для поворота страниц PDF
+export async function rotatePDF(file: File, angle: 90 | 180 | 270): Promise<Blob> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pages = pdfDoc.getPages();
+  
+  for (const page of pages) {
+    const { width, height } = page.getSize();
+    page.setRotation(degrees(angle));
+  }
+  
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
+}
+
+// Функция для разделения PDF на отдельные страницы
+export async function splitPDF(file: File, pageNumbers: number[]): Promise<Blob[]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pdfs: Blob[] = [];
+  
+  for (const pageNum of pageNumbers) {
+    const newPdfDoc = await PDFDocument.create();
+    const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [pageNum - 1]);
+    newPdfDoc.addPage(copiedPage);
+    
+    const pdfBytes = await newPdfDoc.save();
+    pdfs.push(new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' }));
+  }
+  
+  return pdfs;
+}
+
+// Разделение PDF на отдельные страницы (1 PDF на страницу)
+export async function splitPDFIntoPages(file: File): Promise<Blob[]> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pageCount = pdfDoc.getPageCount();
+  const pageNumbers = Array.from({ length: pageCount }, (_, i) => i);
+  return splitPDF(file, pageNumbers.map((n) => n + 1));
+}
