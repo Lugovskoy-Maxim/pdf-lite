@@ -1,10 +1,13 @@
 "use client";
 
-import { useState, useRef } from "react";
-import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, convertImagesToPDF, createZipFromImages } from "./utils/pdfUtils";
-import { Upload, X, Download, Trash2, FileText, Shield, Zap, Image, Merge, SplitSquareVertical, RotateCw, FileDown, CheckCircle2, XCircle, ImagePlus, Shrink } from 'lucide-react';
+import { useState, useRef, useEffect } from "react";
+import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, convertImagesToPDF, createZipFromImages, convertPDFToWord, convertPDFToExcel, addSignature, getPDFPageCount, type SignaturePosition } from "./utils/pdfUtils";
+import { Upload, X, Download, Trash2, FileText, Shield, Zap, Image, Merge, SplitSquareVertical, RotateCw, FileDown, CheckCircle2, XCircle, ImagePlus, Shrink, FileType, Table, PenLine } from 'lucide-react';
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
+import { SignaturePad, SIGNATURE_COLORS } from "../components/SignaturePad";
+import { SignaturePreview } from "../components/SignaturePreview";
+import { PDFToolsPanel } from "../components/PDFToolsPanel";
 
 export default function PDFTools() {
   const [activeTab, setActiveTab] = useState("pdfToImage");
@@ -19,6 +22,14 @@ export default function PDFTools() {
   const [rotateAngle, setRotateAngle] = useState<90 | 180 | 270>(90);
   const [splitMode, setSplitMode] = useState<"all" | "range">("all");
   const [splitRange, setSplitRange] = useState("1");
+  const [signatureBlob, setSignatureBlob] = useState<Blob | null>(null);
+  const [signaturePosition, setSignaturePosition] = useState<SignaturePosition>("bottom-right");
+  const [signatureColor, setSignatureColor] = useState("#1c1917");
+  const [signaturePdfPosition, setSignaturePdfPosition] = useState<{ x: number; y: number } | null>(null);
+  const [signaturePagesMode, setSignaturePagesMode] = useState<"all" | "select">("all");
+  const [signaturePagesRange, setSignaturePagesRange] = useState("1");
+  const [pdfPageCount, setPdfPageCount] = useState<number>(0);
+  const [signaturePreviewPage, setSignaturePreviewPage] = useState(1);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -29,7 +40,13 @@ export default function PDFTools() {
     if (selectedFiles && selectedFiles.length > 0) {
       setFiles(selectedFiles);
       setFileName(selectedFiles[0].name);
-      setFile(selectedFiles[0]);
+      const f = selectedFiles[0];
+      setFile(f);
+      if (f.type.startsWith("application/pdf")) {
+        getPDFPageCount(f).then(setPdfPageCount);
+      } else {
+        setPdfPageCount(0);
+      }
     }
   };
 
@@ -39,7 +56,13 @@ export default function PDFTools() {
     if (droppedFiles && droppedFiles.length > 0) {
       setFiles(droppedFiles);
       setFileName(droppedFiles[0].name);
-      setFile(droppedFiles[0]);
+      const f = droppedFiles[0];
+      setFile(f);
+      if (f.type.startsWith("application/pdf")) {
+        getPDFPageCount(f).then(setPdfPageCount);
+      } else {
+        setPdfPageCount(0);
+      }
     }
   };
 
@@ -51,8 +74,10 @@ export default function PDFTools() {
     setFile(null);
     setFiles(null);
     setFileName("");
+    setPdfPageCount(0);
     setConversionResults([]);
     setCompressResult(null);
+    setSignaturePdfPosition(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -232,6 +257,88 @@ export default function PDFTools() {
     }
   };
 
+  const handlePDFToWord = async () => {
+    if (!file || !file.type.startsWith('application/pdf')) {
+      showStatus('error', 'Выберите PDF файл');
+      return;
+    }
+    setIsLoading(true);
+    setStatusMessage({ type: 'success', text: 'Конвертация в Word...' });
+    try {
+      const blob = await convertPDFToWord(file);
+      const url = URL.createObjectURL(blob);
+      setConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.docx') }]);
+      showStatus('success', 'Конвертация в Word завершена', 5000);
+    } catch (error) {
+      showStatus('error', 'Ошибка: ' + (error as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePDFToExcel = async () => {
+    if (!file || !file.type.startsWith('application/pdf')) {
+      showStatus('error', 'Выберите PDF файл');
+      return;
+    }
+    setIsLoading(true);
+    setStatusMessage({ type: 'success', text: 'Конвертация в Excel...' });
+    try {
+      const blob = await convertPDFToExcel(file);
+      const url = URL.createObjectURL(blob);
+      setConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.xlsx') }]);
+      showStatus('success', 'Конвертация в Excel завершена', 5000);
+    } catch (error) {
+      showStatus('error', 'Ошибка: ' + (error as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleAddSignature = async () => {
+    if (!file || !file.type.startsWith('application/pdf')) {
+      showStatus('error', 'Выберите PDF файл');
+      return;
+    }
+    if (!signatureBlob) {
+      showStatus('error', 'Нарисуйте подпись в поле ниже');
+      return;
+    }
+    let pageNumbers: number[] | undefined;
+    if (signaturePagesMode === "select" && signaturePagesRange.trim()) {
+      const parts = signaturePagesRange.split(/[,\s]+/).flatMap((p) => {
+        if (p.includes("-")) {
+          const [a, b] = p.split("-").map(Number);
+          const start = Math.min(a || 1, b || 1);
+          const end = Math.max(a || 1, b || 1);
+          return Array.from({ length: end - start + 1 }, (_, i) => start + i);
+        }
+        return [parseInt(p, 10)];
+      }).filter((n) => !isNaN(n) && n > 0);
+      pageNumbers = [...new Set(parts)].sort((a, b) => a - b);
+      if (pageNumbers.length === 0) {
+        showStatus('error', 'Укажите номера страниц (например: 1, 3, 5 или 1-5)');
+        return;
+      }
+    }
+    setIsLoading(true);
+    setStatusMessage({ type: 'success', text: 'Добавление подписи...' });
+    try {
+      const blob = await addSignature(file, signatureBlob, {
+        position: signaturePosition,
+        customPosition: signaturePdfPosition ?? undefined,
+        pageNumbers,
+      });
+      const url = URL.createObjectURL(blob);
+      setConversionResults([{ blob, url, name: `signed-${fileName}` }]);
+      showStatus('success', 'Подпись добавлена на все страницы', 5000);
+    } catch (error) {
+      showStatus('error', 'Ошибка: ' + (error as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleEdit = async () => {
     if (!file) {
       showStatus('error', 'Пожалуйста, выберите PDF файл для редактирования');
@@ -386,8 +493,11 @@ export default function PDFTools() {
               {[
                 { id: "pdfToImage" as const, icon: Image, label: "PDF в картинки" },
                 { id: "imageToPdf" as const, icon: ImagePlus, label: "Картинки в PDF" },
+                { id: "pdfToWord" as const, icon: FileType, label: "PDF в Word" },
+                { id: "pdfToExcel" as const, icon: Table, label: "PDF в Excel" },
                 { id: "merge" as const, icon: Merge, label: "Объединить" },
                 { id: "split" as const, icon: SplitSquareVertical, label: "Разделить" },
+                { id: "signature" as const, icon: PenLine, label: "Подпись" },
                 { id: "edit" as const, icon: RotateCw, label: "Редактировать" },
                 { id: "compress" as const, icon: Shrink, label: "Сжать" },
               ].map((tab) => (
@@ -410,9 +520,12 @@ export default function PDFTools() {
           {/* Основной контент */}
           <div className="p-6">
             <div className="flex flex-col lg:flex-row gap-6 mb-6">
-              {/* Область загрузки */}
+              {/* Область загрузки + подпись (при выборе вкладки Подпись) */}
+              <div className="flex-1 flex flex-col gap-4">
               <div
-                className="flex-1 min-h-[200px] border-2 border-dashed border-stone-300 dark:border-stone-600 rounded-xl p-8 text-center transition-colors hover:border-amber-400 dark:hover:border-amber-600"
+                className={`border-2 border-dashed border-stone-300 dark:border-stone-600 rounded-xl text-center transition-colors hover:border-amber-400 dark:hover:border-amber-600 ${
+                  activeTab === "signature" ? "min-h-[120px] p-6" : "min-h-[200px] p-8"
+                }`}
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
               >
@@ -437,6 +550,8 @@ export default function PDFTools() {
                         ? "PDF файлы (2 и более)"
                         : activeTab === "imageToPdf"
                         ? "JPG, PNG, WebP"
+                        : activeTab === "signature" || activeTab === "pdfToWord" || activeTab === "pdfToExcel"
+                        ? "PDF файл"
                         : "PDF или изображения"}
                     </p>
                   </div>
@@ -468,6 +583,35 @@ export default function PDFTools() {
                 </div>
               </div>
 
+              {activeTab === "signature" && (
+                <div className="space-y-4">
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900/50 p-4">
+                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Область для подписи (прозрачный фон PNG)</h4>
+                    <SignaturePad
+                      onSignatureChange={(blob) => { setSignatureBlob(blob); if (!blob) setSignaturePdfPosition(null); }}
+                      width={560}
+                      height={240}
+                      strokeColor={signatureColor}
+                    />
+                  </div>
+                  {file && file.type.startsWith("application/pdf") && signatureBlob && (
+                    <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900/50 p-4">
+                      <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Предпросмотр — перетащите подпись</h4>
+                      <SignaturePreview
+                        pdfFile={file}
+                        signatureBlob={signatureBlob}
+                        position={signaturePosition}
+                        onPositionChange={(x, y) => setSignaturePdfPosition({ x, y })}
+                        previewPage={signaturePreviewPage}
+                        pageCount={pdfPageCount}
+                        onPageChange={setSignaturePreviewPage}
+                      />
+                    </div>
+                  )}
+                </div>
+              )}
+              </div>
+
               {/* Панель настроек */}
               <div className="lg:w-80 flex-shrink-0 space-y-4">
                 
@@ -475,8 +619,8 @@ export default function PDFTools() {
                 {activeTab === "pdfToImage" && (
                   <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
                     <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Формат вывода</h4>
-                    <div className="flex gap-2">
-                      {["JPG", "PNG"].map((format) => (
+                    <div className="flex flex-wrap gap-2">
+                      {["JPG", "PNG", "WebP"].map((format) => (
                         <button
                           key={format}
                           className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-sm font-medium border transition-colors ${
@@ -539,7 +683,145 @@ export default function PDFTools() {
                     </button>
                   </div>
                 )}
-                
+
+                {/* PDF в Word */}
+                {activeTab === "pdfToWord" && (
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
+                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">
+                      Извлечёт текст из PDF и создаст документ Word. Работает с текстовыми PDF (не со сканами).
+                    </p>
+                    <button
+                      onClick={handlePDFToWord}
+                      disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
+                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
+                        file && file.type.startsWith('application/pdf')
+                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
+                      }`}
+                    >
+                      {isLoading ? (
+                        <><span className="animate-spin">⏳</span> Конвертация...</>
+                      ) : (
+                        'Сохранить как Word (.docx)'
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* PDF в Excel */}
+                {activeTab === "pdfToExcel" && (
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
+                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">
+                      Извлечёт текст и создаст таблицу Excel (каждая страница — отдельный лист).
+                    </p>
+                    <button
+                      onClick={handlePDFToExcel}
+                      disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
+                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
+                        file && file.type.startsWith('application/pdf')
+                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
+                      }`}
+                    >
+                      {isLoading ? (
+                        <><span className="animate-spin">⏳</span> Конвертация...</>
+                      ) : (
+                        'Сохранить как Excel (.xlsx)'
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Подпись */}
+                {activeTab === "signature" && (
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4 space-y-4">
+                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white">Страницы для подписи</h4>
+                    <div className="space-y-2">
+                      {[
+                        { mode: "all" as const, label: "Все страницы" },
+                        { mode: "select" as const, label: "Выбрать страницы" },
+                      ].map((opt) => (
+                        <label key={opt.mode} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="radio"
+                            checked={signaturePagesMode === opt.mode}
+                            onChange={() => setSignaturePagesMode(opt.mode)}
+                            className="rounded border-stone-300"
+                          />
+                          <span className="text-sm text-stone-700 dark:text-stone-300">{opt.label}</span>
+                        </label>
+                      ))}
+                      {signaturePagesMode === "select" && (
+                        <input
+                          type="text"
+                          value={signaturePagesRange}
+                          onChange={(e) => setSignaturePagesRange(e.target.value)}
+                          placeholder="1, 3, 5 или 1-5"
+                          className="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600 rounded-lg bg-white dark:bg-stone-800"
+                        />
+                      )}
+                      {pdfPageCount > 0 && (
+                        <p className="text-xs text-stone-500">Всего страниц: {pdfPageCount}</p>
+                      )}
+                    </div>
+                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white pt-2">Позиция по умолчанию</h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {[
+                        { id: "bottom-right" as const, label: "Справа внизу" },
+                        { id: "bottom-left" as const, label: "Слева внизу" },
+                        { id: "top-right" as const, label: "Справа вверху" },
+                        { id: "top-left" as const, label: "Слева вверху" },
+                        { id: "center" as const, label: "По центру" },
+                      ].map((pos) => (
+                        <button
+                          key={pos.id}
+                          type="button"
+                          onClick={() => setSignaturePosition(pos.id)}
+                          className={`py-2 px-2 rounded-lg text-xs font-medium border transition-colors ${
+                            signaturePosition === pos.id
+                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
+                              : "border-stone-200 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-700"
+                          }`}
+                        >
+                          {pos.label}
+                        </button>
+                      ))}
+                    </div>
+                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white pt-2">Цвет подписи</h4>
+                    <div className="flex flex-wrap gap-2">
+                      {SIGNATURE_COLORS.map((c) => (
+                        <button
+                          key={c.value}
+                          type="button"
+                          onClick={() => setSignatureColor(c.value)}
+                          className={`w-8 h-8 rounded-lg border-2 transition-all ${
+                            signatureColor === c.value
+                              ? "border-amber-500 ring-2 ring-amber-200 dark:ring-amber-800"
+                              : "border-stone-200 dark:border-stone-600 hover:border-stone-400"
+                          }`}
+                          style={{ backgroundColor: c.value }}
+                          title={c.name}
+                        />
+                      ))}
+                    </div>
+                    <button
+                      onClick={handleAddSignature}
+                      disabled={isLoading || !file || !file.type.startsWith('application/pdf') || !signatureBlob}
+                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
+                        file && file.type.startsWith('application/pdf') && signatureBlob
+                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
+                      }`}
+                    >
+                      {isLoading ? (
+                        <><span className="animate-spin">⏳</span> Добавление подписи...</>
+                      ) : (
+                        'Добавить подпись в PDF'
+                      )}
+                    </button>
+                  </div>
+                )}
+
                 {/* Сжатие */}
                 {activeTab === "compress" && (
                   <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
@@ -876,13 +1158,15 @@ export default function PDFTools() {
             <h2 className="text-2xl md:text-3xl font-bold text-center text-stone-900 dark:text-white mb-12">
               Всё необходимое в одном месте
             </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
               {[
                 { icon: Image, title: "Конвертация", desc: "PDF ↔ JPG, PNG, WebP" },
+                { icon: FileType, title: "Word / Excel", desc: "PDF в .docx и .xlsx" },
                 { icon: Merge, title: "Объединение", desc: "Несколько PDF в один" },
                 { icon: SplitSquareVertical, title: "Разделение", desc: "Извлечение страниц" },
+                { icon: PenLine, title: "Подпись", desc: "Онлайн-подпись в PDF" },
                 { icon: RotateCw, title: "Редактирование", desc: "Поворот, водяной знак" },
-                { icon: FileDown, title: "Сжатие", desc: "Уменьшение размера файла" },
+                { icon: Shrink, title: "Сжатие", desc: "Уменьшение размера файла" },
               ].map((f) => (
                 <div
                   key={f.title}

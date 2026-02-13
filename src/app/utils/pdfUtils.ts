@@ -162,13 +162,16 @@ export async function convertPDFToImages(file: File, format: string): Promise<Bl
         canvas: canvas,
       }).promise;
       
-      // Конвертируем в нужный формат
+      // Конвертируем в нужный формат (JPG, PNG, WebP)
+      const mimeMap: Record<string, string> = {
+        JPG: 'image/jpeg',
+        PNG: 'image/png',
+        WebP: 'image/webp',
+      };
+      const mime = mimeMap[format] || 'image/png';
+      const quality = format === 'JPG' ? 0.9 : undefined;
       const blobPromise = new Promise<Blob | null>((resolve) => {
-        if (format === 'JPG') {
-          canvas.toBlob(resolve, 'image/jpeg', 0.9);
-        } else {
-          canvas.toBlob(resolve, 'image/png');
-        }
+        canvas.toBlob(resolve, mime, quality);
       });
       
       const blob = await blobPromise;
@@ -353,4 +356,143 @@ export async function splitPDFIntoPages(file: File): Promise<Blob[]> {
   const pageCount = pdfDoc.getPageCount();
   const pageNumbers = Array.from({ length: pageCount }, (_, i) => i);
   return splitPDF(file, pageNumbers.map((n) => n + 1));
+}
+
+// Извлечение текста из PDF (pdf.js)
+async function extractTextFromPDF(file: File): Promise<{ pageNum: number; text: string }[]> {
+  if (typeof window === 'undefined') throw new Error('Доступно только в браузере');
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const result: { pageNum: number; text: string }[] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items.map((item) => ('str' in item ? item.str : '')).join(' ');
+    result.push({ pageNum: i, text });
+  }
+  return result;
+}
+
+// PDF → Word (извлечение текста + создание .docx)
+export async function convertPDFToWord(file: File): Promise<Blob> {
+  const { Document, Packer, Paragraph, TextRun, PageBreak } = await import('docx');
+  const pages = await extractTextFromPDF(file);
+  const children: InstanceType<typeof Paragraph>[] = [];
+  pages.forEach((p, idx) => {
+    if (p.text.trim()) {
+      children.push(new Paragraph({ children: [new TextRun(p.text)] }));
+    }
+    if (idx < pages.length - 1) children.push(new Paragraph({ children: [new PageBreak()] }));
+  });
+  if (children.length === 0) {
+    children.push(new Paragraph({ children: [new TextRun('Текст не найден. PDF может содержать только изображения.')] }));
+  }
+  const doc = new Document({
+    sections: [{ properties: {}, children }],
+  });
+  const buffer = await Packer.toBlob(doc);
+  return buffer;
+}
+
+// PDF → Excel (извлечение текста, каждая страница = лист)
+export async function convertPDFToExcel(file: File): Promise<Blob> {
+  const XLSX = await import('xlsx');
+  const pages = await extractTextFromPDF(file);
+  const wb = XLSX.utils.book_new();
+  pages.forEach((p, idx) => {
+    const lines = p.text.split(/\r?\n/).filter(Boolean);
+    const data = lines.map((line) => [line]);
+    const ws = XLSX.utils.aoa_to_sheet(data.length ? data : [['Текст не найден']]);
+    XLSX.utils.book_append_sheet(wb, ws, `Страница ${idx + 1}`);
+  });
+  const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Blob([wbout], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+}
+
+export type SignaturePosition = 'bottom-right' | 'bottom-left' | 'top-right' | 'top-left' | 'center';
+
+// Получить количество страниц PDF
+export async function getPDFPageCount(file: File): Promise<number> {
+  if (typeof window === 'undefined') return 0;
+  const pdfjsLib = await import('pdfjs-dist');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  return pdf.numPages;
+}
+
+// Добавление подписи в PDF (PNG с прозрачным фоном, выбор позиции и страниц)
+export async function addSignature(
+  file: File,
+  signatureBlob: Blob,
+  options?: {
+    width?: number;
+    position?: SignaturePosition;
+    customPosition?: { x: number; y: number }; // PDF coordinates (bottom-left origin)
+    pageNumbers?: number[]; // 1-based, if not set = all pages
+  }
+): Promise<Blob> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const sigArrayBuffer = await signatureBlob.arrayBuffer();
+  let image;
+  try {
+    image = await pdfDoc.embedPng(sigArrayBuffer);
+  } catch {
+    try {
+      image = await pdfDoc.embedJpg(sigArrayBuffer);
+    } catch {
+      throw new Error('Подпись должна быть в формате PNG (с прозрачным фоном) или JPEG');
+    }
+  }
+  const sigWidth = options?.width ?? 140;
+  const sigHeight = (image.height / image.width) * sigWidth;
+  const margin = 40;
+  const allPages = pdfDoc.getPages();
+  const pageIndices = options?.pageNumbers
+    ? options.pageNumbers.filter((n) => n >= 1 && n <= allPages.length).map((n) => n - 1)
+    : allPages.map((_, i) => i);
+
+  pageIndices.forEach((idx) => {
+    const page = allPages[idx];
+    const { width: pageWidth, height: pageHeight } = page.getSize();
+    let x: number;
+    let y: number;
+    if (options?.customPosition) {
+      x = options.customPosition.x;
+      y = options.customPosition.y;
+    } else {
+      switch (options?.position ?? 'bottom-right') {
+        case 'bottom-right':
+          x = pageWidth - sigWidth - margin;
+          y = margin;
+          break;
+        case 'bottom-left':
+          x = margin;
+          y = margin;
+          break;
+        case 'top-right':
+          x = pageWidth - sigWidth - margin;
+          y = pageHeight - sigHeight - margin;
+          break;
+        case 'top-left':
+          x = margin;
+          y = pageHeight - sigHeight - margin;
+          break;
+        case 'center':
+          x = (pageWidth - sigWidth) / 2;
+          y = (pageHeight - sigHeight) / 2;
+          break;
+        default:
+          x = pageWidth - sigWidth - margin;
+          y = margin;
+      }
+    }
+    page.drawImage(image, { x, y, width: sigWidth, height: sigHeight });
+  });
+
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
 }

@@ -23,9 +23,9 @@ export function Footer() {
             <h4 className="font-medium text-zinc-900 dark:text-white mb-3">Инструменты</h4>
             <ul className="space-y-2 text-sm text-zinc-600 dark:text-zinc-400">
               <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">PDF → Изображения</a></li>
-              <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Изображения → PDF</a></li>
-              <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Объединить PDF</a></li>
-              <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Разделить PDF</a></li>
+              <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">PDF → Word / Excel</a></li>
+              <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Объединить / Разделить</a></li>
+              <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Подпись онлайн</a></li>
               <li><a href="#tools" className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">Сжатие</a></li>
             </ul>
           </div>
