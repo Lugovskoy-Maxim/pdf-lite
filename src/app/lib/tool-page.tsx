@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import { Suspense } from "react";
 import { getToolByPath } from "@/app/tools-config";
 import type { ToolPath } from "@/app/tools-config";
 import { Header } from "@/components/Header";
@@ -40,15 +41,17 @@ export function ToolPage({ path }: { path: ToolPath }) {
     <div className="min-h-screen flex flex-col">
       <Header />
       <main className="flex-1">
-        <InstrumentPageClient
-          tool={{
-            id: tool.id,
-            slug: tool.slug,
-            title: tool.title,
-            description: tool.description,
-            path: tool.path,
-          }}
-        />
+        <Suspense fallback={<div className="max-w-5xl mx-auto px-4 sm:px-6 py-12 text-stone-500">Загрузка инструмента...</div>}>
+          <InstrumentPageClient
+            tool={{
+              id: tool.id,
+              slug: tool.slug,
+              title: tool.title,
+              description: tool.description,
+              path: tool.path,
+            }}
+          />
+        </Suspense>
       </main>
       <Footer />
     </div>

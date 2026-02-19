@@ -49,10 +49,9 @@ async function compressPDFWithImages(file: File, settings: { quality: number; ma
   
   // Динамический импорт pdf.js для избежания проблем SSR
   const pdfjsLib = await import('pdfjs-dist');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
   
   // Загружаем PDF с помощью pdf.js
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
   
   const newPdfDoc = await PDFDocument.create();
   
@@ -131,13 +130,10 @@ export async function convertPDFToImages(file: File, format: string): Promise<Bl
     // Динамический импорт pdf.js для избежания проблем SSR
     const pdfjsLib = await import('pdfjs-dist');
     
-    // Устанавливаем worker для pdf.js (ESM версия)
-    pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
-    
     const arrayBuffer = await file.arrayBuffer();
     
     // Загружаем PDF с помощью pdf.js
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
     
     // Обрабатываем каждую страницу
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -201,6 +197,58 @@ export async function createZipFromImages(images: {blob: Blob, name: string}[]):
   
   const zipBlob = await zip.generateAsync({ type: 'blob' });
   return zipBlob;
+}
+
+function getImageMimeAndExtension(format: string): { mime: string; ext: string; quality?: number } {
+  const normalized = format.toUpperCase();
+  if (normalized === "JPG" || normalized === "JPEG") {
+    return { mime: "image/jpeg", ext: "jpg", quality: 0.92 };
+  }
+  if (normalized === "WEBP") {
+    return { mime: "image/webp", ext: "webp", quality: 0.9 };
+  }
+  return { mime: "image/png", ext: "png" };
+}
+
+// Конвертация изображений между JPG / PNG / WebP через canvas.
+export async function convertImagesBetweenFormats(
+  files: File[],
+  outputFormat: "JPG" | "PNG" | "WebP" | string
+): Promise<{ blob: Blob; name: string }[]> {
+  if (typeof window === "undefined") {
+    throw new Error("Конвертация изображений доступна только в браузере");
+  }
+
+  const { mime, ext, quality } = getImageMimeAndExtension(outputFormat);
+  const results: { blob: Blob; name: string }[] = [];
+
+  for (const file of files) {
+    if (!file.type.startsWith("image/")) continue;
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      bitmap.close();
+      continue;
+    }
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+
+    const blob = await new Promise<Blob | null>((resolve) => {
+      canvas.toBlob(resolve, mime, quality);
+    });
+    if (!blob) continue;
+
+    const baseName = file.name.replace(/\.[^/.]+$/, "");
+    results.push({
+      blob,
+      name: `${baseName}.${ext}`,
+    });
+  }
+
+  return results;
 }
 
 // Конвертация WebP в PNG через canvas (для pdf-lib, который не поддерживает WebP)
@@ -378,9 +426,8 @@ export async function splitPDFIntoPages(file: File): Promise<Blob[]> {
 export async function extractTextFromPDF(file: File): Promise<{ pageNum: number; text: string }[]> {
   if (typeof window === 'undefined') throw new Error('Доступно только в браузере');
   const pdfjsLib = await import('pdfjs-dist');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
   const result: { pageNum: number; text: string }[] = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
@@ -433,9 +480,8 @@ export type SignaturePosition = 'bottom-right' | 'bottom-left' | 'top-right' | '
 export async function getPDFPageCount(file: File): Promise<number> {
   if (typeof window === 'undefined') return 0;
   const pdfjsLib = await import('pdfjs-dist');
-  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
   return pdf.numPages;
 }
 
@@ -511,4 +557,68 @@ export async function addSignature(
 
   const pdfBytes = await pdfDoc.save();
   return new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
+}
+
+export type OrganizePDFPageOperation =
+  | {
+      kind: 'source';
+      sourceIndex: number;
+      rotation: 0 | 90 | 180 | 270;
+      cropPercent: number;
+    }
+  | {
+      kind: 'blank';
+      width: number;
+      height: number;
+    };
+
+/**
+ * Организация страниц PDF: сортировка, поворот, удаление, обрезка и добавление пустых страниц.
+ * Итоговый порядок определяется массивом operations.
+ */
+export async function organizePDFPages(
+  file: File,
+  operations: OrganizePDFPageOperation[]
+): Promise<Blob> {
+  if (operations.length === 0) {
+    throw new Error('Нет страниц для сохранения');
+  }
+
+  const arrayBuffer = await file.arrayBuffer();
+  const sourceDoc = await PDFDocument.load(arrayBuffer);
+  const targetDoc = await PDFDocument.create();
+  const sourceCount = sourceDoc.getPageCount();
+
+  for (const operation of operations) {
+    if (operation.kind === 'blank') {
+      const width = Math.max(10, operation.width || 595.28);
+      const height = Math.max(10, operation.height || 841.89);
+      targetDoc.addPage([width, height]);
+      continue;
+    }
+
+    if (operation.sourceIndex < 0 || operation.sourceIndex >= sourceCount) {
+      continue;
+    }
+
+    const [copiedPage] = await targetDoc.copyPages(sourceDoc, [operation.sourceIndex]);
+    copiedPage.setRotation(degrees(operation.rotation));
+
+    const normalizedCrop = Math.min(Math.max(operation.cropPercent || 0, 0), 45);
+    if (normalizedCrop > 0) {
+      const { width, height } = copiedPage.getSize();
+      const cropX = (width * normalizedCrop) / 100;
+      const cropY = (height * normalizedCrop) / 100;
+      const croppedWidth = width - cropX * 2;
+      const croppedHeight = height - cropY * 2;
+      if (croppedWidth > 4 && croppedHeight > 4) {
+        copiedPage.setCropBox(cropX, cropY, croppedWidth, croppedHeight);
+      }
+    }
+
+    targetDoc.addPage(copiedPage);
+  }
+
+  const bytes = await targetDoc.save();
+  return new Blob([new Uint8Array(bytes)], { type: 'application/pdf' });
 }

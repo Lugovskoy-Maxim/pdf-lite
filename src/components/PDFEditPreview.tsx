@@ -31,9 +31,8 @@ export function PDFEditPreview({
   const renderPage = useCallback(
     async (pageNum: number, rotation: number) => {
       const pdfjsLib = await import("pdfjs-dist");
-      pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
       const arrayBuffer = await pdfFile.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
       const page = await pdf.getPage(pageNum);
       const viewport = page.getViewport({
         scale: THUMB_SCALE,
@@ -61,9 +60,8 @@ export function PDFEditPreview({
     (async () => {
       try {
         const pdfjsLib = await import("pdfjs-dist");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
         const arrayBuffer = await pdfFile.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
         if (cancelled) return;
         const n = pdf.numPages;
         const urls: (string | null)[] = [];
@@ -142,7 +140,7 @@ export function PDFEditPreview({
               <button
                 type="button"
                 onClick={() => handleRotate(index)}
-                className="inline-flex items-center gap-1 px-2 py-1.5 rounded-md text-xs font-medium bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-800 transition-colors"
+                className="btn-ui inline-flex items-center gap-1 px-2 py-1.5 rounded-md text-xs bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-800"
                 title="Повернуть на 90°"
               >
                 <RotateCw className="h-3.5 w-3.5" />

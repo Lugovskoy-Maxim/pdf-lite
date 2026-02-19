@@ -68,13 +68,13 @@ export function SignaturePreview({
     (async () => {
       try {
         const pdfjsLib = await import("pdfjs-dist");
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdn.jsdelivr.net/npm/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;
         const arrayBuffer = await pdfFile.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({
           data: arrayBuffer,
+          disableWorker: true,
           useSystemFonts: true,
           disableFontFace: true,
-        }).promise;
+        } as any).promise;
         if (cancelled) return;
         const page = await pdf.getPage(Math.min(previewPage, pdf.numPages));
         const viewport = page.getViewport({ scale });
@@ -233,10 +233,10 @@ export function SignaturePreview({
                 key={p}
                 type="button"
                 onClick={() => onPageChange(p)}
-                className={`w-8 h-8 rounded text-sm font-medium ${
+                className={`btn-ui btn-icon w-8 h-8 rounded text-sm ${
                   previewPage === p
-                    ? "bg-amber-500 text-stone-900 dark:text-white"
-                    : "bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600"
+                    ? "btn-primary"
+                    : "btn-secondary bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600"
                 }`}
               >
                 {p}

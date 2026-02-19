@@ -47,13 +47,13 @@ export function ThemeToggle() {
   if (!mounted) return null;
 
   return (
-    <div className="inline-flex items-center rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-100/80 dark:bg-zinc-900/80 p-1">
+    <div className="inline-flex items-center rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white/80 dark:bg-zinc-900/80 p-1.5 shadow-sm">
       <button
         onClick={() => setMode("light")}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`btn-ui btn-icon p-1.5 rounded-lg ${
           theme === "light"
-            ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
-            : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            ? "btn-secondary bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
+            : "btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
         }`}
         aria-label="Светлая тема"
         title="Светлая тема"
@@ -62,10 +62,10 @@ export function ThemeToggle() {
       </button>
       <button
         onClick={() => setMode("system")}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`btn-ui btn-icon p-1.5 rounded-lg ${
           theme === "system"
-            ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
-            : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            ? "btn-secondary bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
+            : "btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
         }`}
         aria-label="Системная тема"
         title="Системная тема"
@@ -74,10 +74,10 @@ export function ThemeToggle() {
       </button>
       <button
         onClick={() => setMode("dark")}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`btn-ui btn-icon p-1.5 rounded-lg ${
           theme === "dark"
-            ? "bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
-            : "text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            ? "btn-secondary bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
+            : "btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
         }`}
         aria-label="Тёмная тема"
         title="Тёмная тема"

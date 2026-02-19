@@ -13,8 +13,10 @@ export const TOOL_CATEGORIES = [
 export const TOOL_PATHS = [
   "pdf-to-image",
   "images-to-pdf",
+  "image-converter",
   "pdf-to-word",
   "pdf-to-excel",
+  "organize-pdf",
   "merge-pdf",
   "split-pdf",
   "sign-pdf",
@@ -48,6 +50,16 @@ export const TOOLS = [
     keywords: "картинки в pdf, jpg в pdf, png в pdf, создать pdf из фото, объединить изображения в pdf",
   },
   {
+    id: "imageConverter",
+    slug: "konverter-izobrazheniy",
+    path: "image-converter" as const,
+    category: "toPdf" as const,
+    shortDescription: "Конвертируйте JPG, PNG и WebP между собой. Поддержка пакетной обработки.",
+    title: "Конвертер изображений — JPG, PNG, WebP онлайн",
+    description: "Бесплатный конвертер изображений между форматами JPG, PNG и WebP. Конвертация выполняется в браузере, без загрузки файлов на сервер.",
+    keywords: "конвертер изображений, jpg в png, png в webp, webp в jpg, изменить формат изображения",
+  },
+  {
     id: "pdfToWord",
     slug: "pdf-v-word",
     path: "pdf-to-word" as const,
@@ -66,6 +78,16 @@ export const TOOLS = [
     title: "PDF в Excel — конвертировать PDF в XLSX онлайн",
     description: "Конвертация PDF в Excel (XLSX). Извлечение таблиц и текста из PDF в таблицу Excel. Каждая страница — отдельный лист.",
     keywords: "pdf в excel, pdf в xlsx, конвертер pdf в excel, таблица из pdf",
+  },
+  {
+    id: "organizePages",
+    slug: "organizovat-stranicy-pdf",
+    path: "organize-pdf" as const,
+    category: "organize" as const,
+    shortDescription: "Сортировка, поворот, удаление, обрезка и добавление страниц в режиме предпросмотра.",
+    title: "Организовать страницы PDF — сортировка, поворот, удаление и обрезка онлайн",
+    description: "Организуйте страницы PDF в удобном режиме просмотра: меняйте порядок, поворачивайте, удаляйте, обрезайте и добавляйте пустые страницы.",
+    keywords: "организовать страницы pdf, сортировать страницы pdf, удалить страницы pdf, обрезать страницы pdf, добавить страницы в pdf",
   },
   {
     id: "merge",
@@ -143,6 +165,7 @@ export const TOOLS = [
 export const TOOL_FORMATS: Record<string, { from: string; to: string }> = {
   pdfToImage: { from: "PDF", to: "JPG / PNG / WebP" },
   imageToPdf: { from: "JPG / PNG / WebP", to: "PDF" },
+  imageConverter: { from: "JPG / PNG / WebP", to: "JPG / PNG / WebP" },
   pdfToWord: { from: "PDF", to: "DOC (WORD)" },
   pdfToExcel: { from: "PDF", to: "XLSX (EXCEL)" },
   pdfToZip: { from: "PDF", to: "ZIP" },

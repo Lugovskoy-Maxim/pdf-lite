@@ -3,16 +3,17 @@
 import { useState, useRef, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, rotatePDFPages, convertImagesToPDF, createZipFromImages, convertPDFToWord, convertPDFToExcel, addSignature, getPDFPageCount, extractTextFromPDF, type SignaturePosition } from "./utils/pdfUtils";
-import { Upload, X, Download, Trash2, FileText, Shield, Zap, Image, RotateCw, CheckCircle2, XCircle, Shrink, ChevronRight } from 'lucide-react';
+import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, rotatePDFPages, convertImagesToPDF, createZipFromImages, convertPDFToWord, convertPDFToExcel, addSignature, getPDFPageCount, extractTextFromPDF, organizePDFPages, convertImagesBetweenFormats, type OrganizePDFPageOperation, type SignaturePosition } from "./utils/pdfUtils";
+import { Upload, X, Download, Trash2, FileText, Shield, Zap, Image, RotateCw, CheckCircle2, XCircle, ChevronRight } from 'lucide-react';
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { SignaturePad, SIGNATURE_COLORS } from "../components/SignaturePad";
 import { SignaturePreview } from "../components/SignaturePreview";
 import { PDFEditPreview } from "../components/PDFEditPreview";
+import { PDFPageOrganizer, type OrganizerPageItem } from "../components/PDFPageOrganizer";
 import { TOOLS, TOOL_CATEGORIES, getToolById } from "./tools-config";
 
-const TAB_IDS = ["pdfToImage", "imageToPdf", "pdfToWord", "pdfToExcel", "merge", "split", "signature", "edit", "compress", "pdfToZip", "extractText"] as const;
+const TAB_IDS = ["pdfToImage", "imageToPdf", "imageConverter", "pdfToWord", "pdfToExcel", "organizePages", "merge", "split", "signature", "edit", "compress", "pdfToZip", "extractText"] as const;
 
 const IMAGE_FORMAT_OPTIONS = [
   { value: "JPG", title: "JPG", hint: "Меньше размер", icon: "/icons/format-jpg.svg" },
@@ -23,8 +24,10 @@ const IMAGE_FORMAT_OPTIONS = [
 const TOOL_BUTTON_LABELS: Record<string, string> = {
   pdfToImage: "PDF в картинки",
   imageToPdf: "Картинки в PDF",
+  imageConverter: "Конвертер изображений",
   pdfToWord: "PDF в Word",
   pdfToExcel: "PDF в Excel",
+  organizePages: "Организовать страницы",
   merge: "Объединить",
   split: "Разделить",
   signature: "Подпись",
@@ -37,8 +40,10 @@ const TOOL_BUTTON_LABELS: Record<string, string> = {
 const ICON_BADGE_STYLES: Record<string, string> = {
   pdfToImage: "bg-sky-100 dark:bg-sky-900/40",
   imageToPdf: "bg-rose-100 dark:bg-rose-900/40",
+  imageConverter: "bg-pink-100 dark:bg-pink-900/40",
   pdfToWord: "bg-blue-100 dark:bg-blue-900/40",
   pdfToExcel: "bg-emerald-100 dark:bg-emerald-900/40",
+  organizePages: "bg-indigo-100 dark:bg-indigo-900/40",
   merge: "bg-orange-100 dark:bg-orange-900/40",
   split: "bg-violet-100 dark:bg-violet-900/40",
   signature: "bg-fuchsia-100 dark:bg-fuchsia-900/40",
@@ -56,11 +61,25 @@ function getToolButtonLabel(toolId: string, fallbackTitle: string) {
   return TOOL_BUTTON_LABELS[toolId] ?? fallbackTitle;
 }
 
-function PDFToolsContent() {
+function getPrimaryButtonClass(enabled: boolean, withTopMargin = false) {
+  return `btn-ui btn-primary w-full ${withTopMargin ? "mt-4" : ""} ${
+    enabled
+      ? ""
+      : "bg-stone-200 dark:bg-stone-700 border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400"
+  }`;
+}
+
+type PDFToolsContentProps = {
+  forcedTool?: string;
+  forcedStandalone?: boolean;
+};
+
+export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToolsContentProps = {}) {
   const searchParams = useSearchParams();
   const router = useRouter();
-  const toolFromUrl = useMemo(() => searchParams.get("tool"), [searchParams]);
-  const standalone = searchParams.get("standalone") === "1";
+  const toolFromQuery = useMemo(() => searchParams.get("tool"), [searchParams]);
+  const toolFromUrl = forcedTool ?? toolFromQuery;
+  const standalone = forcedStandalone || searchParams.get("standalone") === "1";
   const initialTabFromUrl = useMemo(() => {
     if (toolFromUrl && TAB_IDS.includes(toolFromUrl as (typeof TAB_IDS)[number])) return toolFromUrl;
     return null;
@@ -108,6 +127,7 @@ function PDFToolsContent() {
   const [signaturePagesRange, setSignaturePagesRange] = useState("1");
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
   const [signaturePreviewPage, setSignaturePreviewPage] = useState(1);
+  const [organizerPages, setOrganizerPages] = useState<OrganizerPageItem[]>([]);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
   const [extractedText, setExtractedText] = useState<{ pageNum: number; text: string }[] | null>(null);
@@ -120,6 +140,85 @@ function PDFToolsContent() {
     if (file) return [file];
     return [];
   }, [files, file]);
+  const selectedPdfFile = useMemo(
+    () => fileList.find((f) => f.type === "application/pdf") ?? null,
+    [fileList]
+  );
+  const imageFiles = useMemo(
+    () => fileList.filter((f) => f.type.startsWith("image/")),
+    [fileList]
+  );
+  const hasOnlyImages = fileList.length > 0 && imageFiles.length === fileList.length;
+  const hasAtLeastTwoPdfFiles = fileList.filter((f) => f.type === "application/pdf").length >= 2;
+  const allowMultipleSelection = activeTab === "merge" || activeTab === "imageToPdf" || activeTab === "imageConverter";
+  const inputAccept = useMemo(() => {
+    if (activeTab === "imageToPdf" || activeTab === "imageConverter") return ".jpg,.jpeg,.png,.webp";
+    if (activeTab === "merge") return ".pdf";
+    if (activeTab === "pdfToImage" || activeTab === "pdfToWord" || activeTab === "pdfToExcel" || activeTab === "pdfToZip" || activeTab === "extractText" || activeTab === "signature" || activeTab === "edit" || activeTab === "split" || activeTab === "compress" || activeTab === "organizePages") {
+      return ".pdf";
+    }
+    return ".pdf,.jpg,.jpeg,.png,.webp";
+  }, [activeTab]);
+
+  const parsePageSelection = (value: string, maxPage?: number) => {
+    const pages = new Set<number>();
+    const tokens = value
+      .split(/[,\s]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+
+    for (const token of tokens) {
+      if (token.includes("-")) {
+        const [rawStart, rawEnd] = token.split("-");
+        const start = Number(rawStart);
+        const end = Number(rawEnd);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        const from = Math.min(start, end);
+        const to = Math.max(start, end);
+        for (let n = from; n <= to; n += 1) {
+          if (n <= 0) continue;
+          if (maxPage && n > maxPage) continue;
+          pages.add(n);
+        }
+        continue;
+      }
+
+      const page = Number(token);
+      if (!Number.isFinite(page) || page <= 0) continue;
+      if (maxPage && page > maxPage) continue;
+      pages.add(page);
+    }
+
+    return [...pages].sort((a, b) => a - b);
+  };
+
+  const clearConversionResults = () => {
+    setConversionResults((prev) => {
+      prev.forEach((item) => URL.revokeObjectURL(item.url));
+      return [];
+    });
+  };
+
+  const clearCompressResult = () => {
+    setCompressResult((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+  };
+
+  const replaceConversionResults = (next: { blob: Blob; url: string; name: string }[]) => {
+    setConversionResults((prev) => {
+      prev.forEach((item) => URL.revokeObjectURL(item.url));
+      return next;
+    });
+  };
+
+  const replaceCompressResult = (next: { blob: Blob; url: string; originalSize: number; compressedSize: number } | null) => {
+    setCompressResult((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return next;
+    });
+  };
 
   useEffect(() => {
     const list = files && files.length > 0 ? Array.from(files) : file ? [file] : [];
@@ -134,6 +233,22 @@ function PDFToolsContent() {
     return () => urls.forEach((u) => u && URL.revokeObjectURL(u));
   }, [files, file]);
 
+  useEffect(() => {
+    if ((activeTab === "pdfToImage" || activeTab === "pdfToZip" || activeTab === "imageConverter") && !convertFormat) {
+      setConvertFormat("PNG");
+    }
+    setStatusMessage(null);
+    setExtractedText(null);
+    setConversionResults((prev) => {
+      prev.forEach((item) => URL.revokeObjectURL(item.url));
+      return [];
+    });
+    setCompressResult((prev) => {
+      if (prev) URL.revokeObjectURL(prev.url);
+      return null;
+    });
+  }, [activeTab]);
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -143,9 +258,14 @@ function PDFToolsContent() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files;
     if (selectedFiles && selectedFiles.length > 0) {
+      const list = Array.from(selectedFiles);
+      const primaryFile =
+        activeTab === "imageToPdf" || activeTab === "imageConverter"
+          ? list[0]
+          : list.find((f) => f.type === "application/pdf") ?? list[0];
       setFiles(selectedFiles);
-      setFileName(selectedFiles[0].name);
-      const f = selectedFiles[0];
+      setFileName(primaryFile.name);
+      const f = primaryFile;
       setFile(f);
       if (f.type.startsWith("application/pdf")) {
         getPDFPageCount(f).then((n) => {
@@ -163,9 +283,14 @@ function PDFToolsContent() {
     e.preventDefault();
     const droppedFiles = e.dataTransfer.files;
     if (droppedFiles && droppedFiles.length > 0) {
+      const list = Array.from(droppedFiles);
+      const primaryFile =
+        activeTab === "imageToPdf" || activeTab === "imageConverter"
+          ? list[0]
+          : list.find((f) => f.type === "application/pdf") ?? list[0];
       setFiles(droppedFiles);
-      setFileName(droppedFiles[0].name);
-      const f = droppedFiles[0];
+      setFileName(primaryFile.name);
+      const f = primaryFile;
       setFile(f);
       if (f.type.startsWith("application/pdf")) {
         getPDFPageCount(f).then((n) => {
@@ -189,8 +314,9 @@ function PDFToolsContent() {
     setFileName("");
     setPdfPageCount(0);
     setEditPageRotations([]);
-    setConversionResults([]);
-    setCompressResult(null);
+    setOrganizerPages([]);
+    clearConversionResults();
+    clearCompressResult();
     setExtractedText(null);
     setSignaturePdfPosition(null);
     if (fileInputRef.current) {
@@ -210,8 +336,12 @@ function PDFToolsContent() {
   };
 
   const handleImageConvert = async () => {
-    if (!files || files.length === 0) {
+    if (imageFiles.length === 0) {
       showStatus('error', 'Пожалуйста, выберите изображения для конвертации');
+      return;
+    }
+    if (!hasOnlyImages) {
+      showStatus('error', 'Для этого инструмента нужны только изображения (JPG, PNG, WebP)');
       return;
     }
     
@@ -219,16 +349,16 @@ function PDFToolsContent() {
     setStatusMessage({ type: 'success', text: 'Конвертация изображений в PDF...' });
     
     try {
-      const pdfBlob = await convertImagesToPDF(Array.from(files));
+      const pdfBlob = await convertImagesToPDF(imageFiles);
       
       // Создание ссылки для скачивания и сохранение результата в состоянии
       const url = URL.createObjectURL(pdfBlob);
-      const resultName = files.length > 1
-        ? `converted-${files.length}-images.pdf`
+      const resultName = imageFiles.length > 1
+        ? `converted-${imageFiles.length}-images.pdf`
         : fileName.replace(/\.[^/.]+$/, ".pdf");
       
       // Сохраняем результат в состоянии conversionResults для отображения
-      setConversionResults([{
+      replaceConversionResults([{
         blob: pdfBlob,
         url,
         name: resultName
@@ -242,8 +372,47 @@ function PDFToolsContent() {
     }
   };
 
+  const handleImageFormatConvert = async () => {
+    if (imageFiles.length === 0) {
+      showStatus("error", "Пожалуйста, выберите изображения для конвертации");
+      return;
+    }
+    if (!hasOnlyImages) {
+      showStatus("error", "Для этого инструмента нужны только изображения (JPG, PNG, WebP)");
+      return;
+    }
+    if (!convertFormat) {
+      showStatus("error", "Выберите формат вывода");
+      return;
+    }
+
+    setIsLoading(true);
+    setStatusMessage({ type: "success", text: "Конвертация изображений..." });
+
+    try {
+      const results = await convertImagesBetweenFormats(imageFiles, convertFormat);
+      if (results.length === 0) {
+        showStatus("error", "Не удалось конвертировать выбранные файлы");
+        return;
+      }
+
+      replaceConversionResults(
+        results.map((item) => ({
+          blob: item.blob,
+          url: URL.createObjectURL(item.blob),
+          name: item.name,
+        }))
+      );
+      showStatus("success", `Готово: обработано ${results.length} изображений`, 6000);
+    } catch (error) {
+      showStatus("error", "Ошибка при конвертации изображений: " + (error as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleConvert = async () => {
-    if (!file) {
+    if (!selectedPdfFile) {
       showStatus('error', 'Пожалуйста, выберите PDF файл для конвертации');
       return;
     }
@@ -257,7 +426,7 @@ function PDFToolsContent() {
     setStatusMessage({ type: 'success', text: 'Конвертация...' });
     
     try {
-      const images = await convertPDFToImages(file, convertFormat);
+      const images = await convertPDFToImages(selectedPdfFile, convertFormat);
       
       // Сохраняем результаты конвертации в состоянии
       const results = images.map((blob, index) => ({
@@ -266,7 +435,7 @@ function PDFToolsContent() {
         name: `page-${index + 1}.${convertFormat.toLowerCase()}`
       }));
       
-      setConversionResults(results);
+      replaceConversionResults(results);
       showStatus('success', `Конвертация завершена! ${images.length} страниц(а) обработано`, 5000);
     } catch (error) {
       showStatus('error', 'Ошибка при конвертации файла: ' + (error as Error).message);
@@ -276,24 +445,24 @@ function PDFToolsContent() {
   };
 
   const handleCompress = async () => {
-    if (!file) {
+    if (!selectedPdfFile) {
       showStatus('error', 'Пожалуйста, выберите PDF файл для сжатия');
       return;
     }
     
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Сжатие файла...' });
-    setCompressResult(null);
+    clearCompressResult();
     
     try {
-      const compressedFile = await compressPDF(file, compressionLevel);
+      const compressedFile = await compressPDF(selectedPdfFile, compressionLevel);
       
       // Сохраняем результат для отображения
       const url = URL.createObjectURL(compressedFile);
-      const originalSize = file.size;
+      const originalSize = selectedPdfFile.size;
       const compressedSize = compressedFile.size;
       
-      setCompressResult({
+      replaceCompressResult({
         blob: compressedFile,
         url,
         originalSize,
@@ -333,7 +502,7 @@ function PDFToolsContent() {
   };
 
   const handleSplit = async () => {
-    if (!file || !file.type.startsWith('application/pdf')) {
+    if (!selectedPdfFile) {
       showStatus('error', 'Выберите PDF файл для разделения');
       return;
     }
@@ -342,28 +511,22 @@ function PDFToolsContent() {
     try {
       let pdfBlobs: Blob[];
       if (splitMode === 'all') {
-        pdfBlobs = await splitPDFIntoPages(file);
+        pdfBlobs = await splitPDFIntoPages(selectedPdfFile);
       } else {
-        const parts = splitRange.split(/[,\s]+/).flatMap((p) => {
-          if (p.includes('-')) {
-            const [a, b] = p.split('-').map(Number);
-            return Array.from({ length: (b || a) - a + 1 }, (_, i) => a + i);
-          }
-          return [parseInt(p, 10)];
-        }).filter((n) => !isNaN(n) && n > 0);
+        const parts = parsePageSelection(splitRange, pdfPageCount || undefined);
         if (parts.length === 0) {
           showStatus('error', 'Укажите номера страниц (например: 1,3,5 или 1-5)');
           setIsLoading(false);
           return;
         }
-        pdfBlobs = await splitPDF(file, [...new Set(parts)].sort((a, b) => a - b));
+        pdfBlobs = await splitPDF(selectedPdfFile, parts);
       }
       const results = pdfBlobs.map((blob, i) => ({
         blob,
         url: URL.createObjectURL(blob),
         name: `page-${i + 1}.pdf`,
       }));
-      setConversionResults(results);
+      replaceConversionResults(results);
       showStatus('success', `Разделено на ${pdfBlobs.length} файлов`, 5000);
     } catch (error) {
       showStatus('error', 'Ошибка при разделении: ' + (error as Error).message);
@@ -373,16 +536,16 @@ function PDFToolsContent() {
   };
 
   const handlePDFToWord = async () => {
-    if (!file || !file.type.startsWith('application/pdf')) {
+    if (!selectedPdfFile) {
       showStatus('error', 'Выберите PDF файл');
       return;
     }
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Конвертация в Word...' });
     try {
-      const blob = await convertPDFToWord(file);
+      const blob = await convertPDFToWord(selectedPdfFile);
       const url = URL.createObjectURL(blob);
-      setConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.docx') }]);
+      replaceConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.docx') }]);
       showStatus('success', 'Конвертация в Word завершена', 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
@@ -392,16 +555,16 @@ function PDFToolsContent() {
   };
 
   const handlePDFToExcel = async () => {
-    if (!file || !file.type.startsWith('application/pdf')) {
+    if (!selectedPdfFile) {
       showStatus('error', 'Выберите PDF файл');
       return;
     }
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Конвертация в Excel...' });
     try {
-      const blob = await convertPDFToExcel(file);
+      const blob = await convertPDFToExcel(selectedPdfFile);
       const url = URL.createObjectURL(blob);
-      setConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.xlsx') }]);
+      replaceConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.xlsx') }]);
       showStatus('success', 'Конвертация в Excel завершена', 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
@@ -411,7 +574,7 @@ function PDFToolsContent() {
   };
 
   const handlePdfToZip = async () => {
-    if (!file || !file.type.startsWith("application/pdf")) {
+    if (!selectedPdfFile) {
       showStatus("error", "Выберите PDF файл");
       return;
     }
@@ -419,7 +582,7 @@ function PDFToolsContent() {
     setIsLoading(true);
     setStatusMessage({ type: "success", text: "Создание архива..." });
     try {
-      const images = await convertPDFToImages(file, format);
+      const images = await convertPDFToImages(selectedPdfFile, format);
       const items = images.map((blob, i) => ({
         blob,
         name: `page-${i + 1}.${format.toLowerCase()}`,
@@ -442,14 +605,14 @@ function PDFToolsContent() {
   };
 
   const handleExtractText = async () => {
-    if (!file || !file.type.startsWith("application/pdf")) {
+    if (!selectedPdfFile) {
       showStatus("error", "Выберите PDF файл");
       return;
     }
     setIsLoading(true);
     setStatusMessage({ type: "success", text: "Извлечение текста..." });
     try {
-      const pages = await extractTextFromPDF(file);
+      const pages = await extractTextFromPDF(selectedPdfFile);
       setExtractedText(pages);
       showStatus("success", "Текст извлечён", 5000);
     } catch (error) {
@@ -460,7 +623,7 @@ function PDFToolsContent() {
   };
 
   const handleAddSignature = async () => {
-    if (!file || !file.type.startsWith('application/pdf')) {
+    if (!selectedPdfFile) {
       showStatus('error', 'Выберите PDF файл');
       return;
     }
@@ -470,16 +633,7 @@ function PDFToolsContent() {
     }
     let pageNumbers: number[] | undefined;
     if (signaturePagesMode === "select" && signaturePagesRange.trim()) {
-      const parts = signaturePagesRange.split(/[,\s]+/).flatMap((p) => {
-        if (p.includes("-")) {
-          const [a, b] = p.split("-").map(Number);
-          const start = Math.min(a || 1, b || 1);
-          const end = Math.max(a || 1, b || 1);
-          return Array.from({ length: end - start + 1 }, (_, i) => start + i);
-        }
-        return [parseInt(p, 10)];
-      }).filter((n) => !isNaN(n) && n > 0);
-      pageNumbers = [...new Set(parts)].sort((a, b) => a - b);
+      pageNumbers = parsePageSelection(signaturePagesRange, pdfPageCount || undefined);
       if (pageNumbers.length === 0) {
         showStatus('error', 'Укажите номера страниц (например: 1, 3, 5 или 1-5)');
         return;
@@ -488,14 +642,20 @@ function PDFToolsContent() {
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Добавление подписи...' });
     try {
-      const blob = await addSignature(file, signatureBlob, {
+      const blob = await addSignature(selectedPdfFile, signatureBlob, {
         position: signaturePosition,
         customPosition: signaturePdfPosition ?? undefined,
         pageNumbers,
       });
       const url = URL.createObjectURL(blob);
-      setConversionResults([{ blob, url, name: `signed-${fileName}` }]);
-      showStatus('success', 'Подпись добавлена на все страницы', 5000);
+      replaceConversionResults([{ blob, url, name: `signed-${fileName}` }]);
+      showStatus(
+        'success',
+        pageNumbers && pageNumbers.length > 0
+          ? `Подпись добавлена на ${pageNumbers.length} стр.`
+          : 'Подпись добавлена на все страницы',
+        5000
+      );
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
@@ -506,9 +666,20 @@ function PDFToolsContent() {
   const hasPageRotations = editPageRotations.some((r) => r !== 0);
   const hasWatermark = editTools.includes("Водяной знак");
   const hasGlobalRotate = editTools.includes("Повернуть");
+  const hasOrganizeChanges = useMemo(() => {
+    const active = organizerPages.filter((p) => !p.deleted);
+    if (active.length === 0) return false;
+    return active.some((p, idx) => {
+      if (p.kind === "blank") return true;
+      if (p.sourceIndex !== idx) return true;
+      if (p.rotation !== 0) return true;
+      if (p.cropPercent > 0) return true;
+      return false;
+    });
+  }, [organizerPages]);
 
   const handleEdit = async () => {
-    if (!file || !file.type.startsWith("application/pdf")) {
+    if (!selectedPdfFile) {
       showStatus("error", "Пожалуйста, выберите PDF файл для редактирования");
       return;
     }
@@ -522,7 +693,7 @@ function PDFToolsContent() {
     setStatusMessage({ type: "success", text: "Редактирование файла..." });
 
     try {
-      let resultFile: Blob = file;
+      let resultFile: Blob = selectedPdfFile;
       let resultName = fileName;
 
       if (hasPageRotations) {
@@ -539,10 +710,52 @@ function PDFToolsContent() {
       }
 
       const url = URL.createObjectURL(resultFile);
-      setConversionResults([{ blob: resultFile, url, name: resultName }]);
+      replaceConversionResults([{ blob: resultFile, url, name: resultName }]);
       showStatus("success", `Редактирование ${fileName} завершено!`, 5000);
     } catch (error) {
       showStatus("error", "Ошибка при редактировании файла: " + (error as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleOrganizePages = async () => {
+    if (!selectedPdfFile) {
+      showStatus("error", "Выберите PDF файл");
+      return;
+    }
+
+    const activePages = organizerPages.filter((p) => !p.deleted);
+    if (activePages.length === 0) {
+      showStatus("error", "После удаления не осталось страниц для сохранения");
+      return;
+    }
+
+    const operations: OrganizePDFPageOperation[] = activePages.map((page) =>
+      page.kind === "blank"
+        ? {
+            kind: "blank",
+            width: page.width,
+            height: page.height,
+          }
+        : {
+            kind: "source",
+            sourceIndex: page.sourceIndex ?? 0,
+            rotation: page.rotation,
+            cropPercent: page.cropPercent,
+          }
+    );
+
+    setIsLoading(true);
+    setStatusMessage({ type: "success", text: "Организация страниц..." });
+
+    try {
+      const blob = await organizePDFPages(selectedPdfFile, operations);
+      const url = URL.createObjectURL(blob);
+      replaceConversionResults([{ blob, url, name: `organized-${fileName}` }]);
+      showStatus("success", `Готово: ${activePages.length} стр. в новом порядке`, 6000);
+    } catch (error) {
+      showStatus("error", "Ошибка при организации страниц: " + (error as Error).message);
     } finally {
       setIsLoading(false);
     }
@@ -582,10 +795,7 @@ function PDFToolsContent() {
   };
 
   const deleteCompressResult = () => {
-    if (compressResult) {
-      URL.revokeObjectURL(compressResult.url);
-      setCompressResult(null);
-    }
+    clearCompressResult();
   };
 
   const downloadAllAsZip = async () => {
@@ -652,7 +862,7 @@ function PDFToolsContent() {
                 <button
                   key={cat.id}
                   onClick={() => setCategoryFilter(cat.id)}
-                  className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
+                  className={`btn-ui rounded-full px-4 py-2.5 text-sm transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
                     categoryFilter === cat.id
                       ? "bg-amber-500 text-stone-900 shadow-md shadow-amber-500/25"
                       : "bg-white dark:bg-stone-800/80 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600"
@@ -730,21 +940,20 @@ function PDFToolsContent() {
             <p className="text-xs font-semibold text-stone-500 dark:text-stone-400 mb-3 uppercase tracking-wider">Инструменты</p>
             <div className="flex flex-wrap gap-2">
               {TOOLS.map((tool) => (
-                <button
+                <Link
                   key={tool.id}
-                  type="button"
-                  onClick={() => setActiveTab(tool.id)}
-                  className={`inline-flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all border focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
+                  href={`/${tool.path}`}
+                  className={`btn-ui inline-flex items-center gap-2.5 px-3 py-2 text-xs sm:text-sm transition-all border focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
                     activeTab === tool.id
                       ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-stone-900 dark:text-stone-100 shadow-sm"
-                      : "border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+                      : "btn-secondary border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300"
                   }`}
                 >
                   <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${getIconBadgeStyle(tool.id)}`}>
                     <img src={`/icons/${tool.id}.svg`} alt="" className="h-4 w-4 object-contain" />
                   </span>
                   <span>{getToolButtonLabel(tool.id, tool.title.split(" — ")[0])}</span>
-                </button>
+                </Link>
               ))}
             </div>
           </div>
@@ -753,18 +962,24 @@ function PDFToolsContent() {
           <div className="p-6">
             <div className="mb-6 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
               {[
-                { step: "1", label: "Загрузите файл" },
-                { step: "2", label: "Настройте параметры" },
-                { step: "3", label: "Скачайте результат" },
+                { step: "1", label: "Загрузите файл", icon: Upload, iconClass: "text-sky-600 dark:text-sky-400", glowClass: "from-sky-100/90 dark:from-sky-900/50" },
+                { step: "2", label: "Настройте параметры", icon: Zap, iconClass: "text-violet-600 dark:text-violet-400", glowClass: "from-violet-100/90 dark:from-violet-900/50" },
+                { step: "3", label: "Скачайте результат", icon: Download, iconClass: "text-emerald-600 dark:text-emerald-400", glowClass: "from-emerald-100/90 dark:from-emerald-900/50" },
               ].map((item) => (
                 <div
                   key={item.step}
-                  className="flex items-center gap-3 rounded-lg border border-stone-200 bg-stone-50/70 px-3 py-2.5 dark:border-stone-700 dark:bg-stone-800/50"
+                  className="group relative overflow-hidden rounded-xl border border-stone-200/90 bg-stone-50/80 px-4 py-3.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md dark:border-stone-700/80 dark:bg-stone-800/50"
                 >
-                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-xs font-semibold text-stone-900 dark:text-white">
-                    {item.step}
-                  </span>
-                  <span className="font-medium text-stone-700 dark:text-stone-200">{item.label}</span>
+                  <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${item.glowClass} via-transparent to-transparent opacity-80`} />
+                  <div className="relative flex items-center gap-3">
+                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/70 bg-amber-100 text-xs font-bold text-amber-700 dark:border-amber-700/60 dark:bg-amber-900/60 dark:text-amber-300">
+                      {item.step}
+                    </span>
+                    <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/90 dark:bg-stone-900/80 ${item.iconClass}`}>
+                      <item.icon className="h-4 w-4" />
+                    </span>
+                    <span className="font-semibold text-stone-700 dark:text-stone-100">{item.label}</span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -783,8 +998,8 @@ function PDFToolsContent() {
                   ref={fileInputRef}
                   onChange={handleFileChange}
                   className="hidden"
-                  accept=".pdf,.jpg,.jpeg,.png,.webp"
-                  multiple
+                  accept={inputAccept}
+                  multiple={allowMultipleSelection}
                 />
                 <div className="space-y-4">
                   <div className="mx-auto w-14 h-14 bg-amber-100 dark:bg-amber-900/50 rounded-xl flex items-center justify-center">
@@ -797,16 +1012,16 @@ function PDFToolsContent() {
                     <p className="text-sm text-stone-500 dark:text-stone-400 mt-1">
                       {activeTab === "merge"
                         ? "PDF файлы (2 и более)"
-                        : activeTab === "imageToPdf"
+                        : activeTab === "imageToPdf" || activeTab === "imageConverter"
                         ? "JPG, PNG, WebP"
-                        : activeTab === "signature" || activeTab === "pdfToWord" || activeTab === "pdfToExcel" || activeTab === "pdfToZip" || activeTab === "extractText"
+                        : activeTab === "signature" || activeTab === "pdfToWord" || activeTab === "pdfToExcel" || activeTab === "pdfToZip" || activeTab === "extractText" || activeTab === "organizePages"
                         ? "PDF файл"
                         : "PDF или изображения"}
                     </p>
                   </div>
                   <button
                     onClick={triggerFileInput}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg text-stone-900 dark:text-white bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 transition-colors"
+                    className="btn-ui btn-primary px-5 py-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900"
                   >
                     <Upload className="h-4 w-4" />
                     Выбрать файлы
@@ -819,7 +1034,7 @@ function PDFToolsContent() {
                         </span>
                         <button
                           onClick={handleClearFile}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-stone-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors"
+                          className="btn-ui btn-ghost px-2.5 py-1.5 text-sm text-stone-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50"
                           title="Удалить все"
                         >
                           <X className="h-4 w-4" />
@@ -878,6 +1093,14 @@ function PDFToolsContent() {
                 />
               )}
 
+              {activeTab === "organizePages" && selectedPdfFile && (
+                <PDFPageOrganizer
+                  pdfFile={selectedPdfFile}
+                  pageCount={pdfPageCount}
+                  onChange={setOrganizerPages}
+                />
+              )}
+
               {activeTab === "signature" && (
                 <div className="space-y-4">
                   <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900/50 p-4">
@@ -919,10 +1142,10 @@ function PDFToolsContent() {
                         <button
                           key={format.value}
                           type="button"
-                          className={`relative rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                          className={`btn-ui relative justify-start rounded-xl border px-3 py-2.5 text-left transition-colors ${
                             convertFormat === format.value
                               ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
-                              : "border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700"
+                              : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
                           }`}
                           onClick={() => setConvertFormat(format.value)}
                         >
@@ -939,14 +1162,10 @@ function PDFToolsContent() {
                     </div>
                     <button
                       onClick={handleConvert}
-                      disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
-                      className={`w-full mt-4 py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
-                        file && file.type.startsWith('application/pdf')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
-                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
-                      }`}
+                      disabled={isLoading || !selectedPdfFile}
+                      className={getPrimaryButtonClass(Boolean(selectedPdfFile), true)}
                     >
-                      {isLoading && file?.type.startsWith('application/pdf') ? (
+                      {isLoading && selectedPdfFile ? (
                         <>
                           <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
                           Обработка...
@@ -964,14 +1183,10 @@ function PDFToolsContent() {
                     <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">Соберёт все изображения в один PDF-документ</p>
                     <button
                       onClick={handleImageConvert}
-                      disabled={isLoading || !file || !file.type.startsWith('image/')}
-                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
-                        file && file.type.startsWith('image/')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
-                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
-                      }`}
+                      disabled={isLoading || !hasOnlyImages}
+                      className={getPrimaryButtonClass(Boolean(hasOnlyImages))}
                     >
-                      {isLoading && file && file.type.startsWith('image/') ? (
+                      {isLoading && hasOnlyImages ? (
                         <>
                           <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                             <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
@@ -986,6 +1201,50 @@ function PDFToolsContent() {
                   </div>
                 )}
 
+                {/* Конвертер изображений */}
+                {activeTab === "imageConverter" && (
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
+                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Формат вывода</h4>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {IMAGE_FORMAT_OPTIONS.map((format) => (
+                        <button
+                          key={format.value}
+                          type="button"
+                          className={`btn-ui relative justify-start rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                            convertFormat === format.value
+                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
+                              : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
+                          }`}
+                          onClick={() => setConvertFormat(format.value)}
+                        >
+                          {convertFormat === format.value && (
+                            <CheckCircle2 className="absolute right-2.5 top-2.5 h-4 w-4 text-amber-600 dark:text-amber-300" />
+                          )}
+                          <div className="flex items-center gap-2">
+                            <img src={format.icon} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
+                            <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">{format.title}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{format.hint}</p>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={handleImageFormatConvert}
+                      disabled={isLoading || !hasOnlyImages}
+                      className={getPrimaryButtonClass(Boolean(hasOnlyImages), true)}
+                    >
+                      {isLoading && hasOnlyImages ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                          Конвертация...
+                        </>
+                      ) : (
+                        <>Конвертировать в {convertFormat || "формат"}</>
+                      )}
+                    </button>
+                  </div>
+                )}
+
                 {/* PDF в Word */}
                 {activeTab === "pdfToWord" && (
                   <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
@@ -994,12 +1253,8 @@ function PDFToolsContent() {
                     </p>
                     <button
                       onClick={handlePDFToWord}
-                      disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
-                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
-                        file && file.type.startsWith('application/pdf')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
-                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
-                      }`}
+                      disabled={isLoading || !selectedPdfFile}
+                      className={getPrimaryButtonClass(Boolean(selectedPdfFile))}
                     >
                       {isLoading ? (
                         <><span className="animate-spin">⏳</span> Конвертация...</>
@@ -1018,12 +1273,8 @@ function PDFToolsContent() {
                     </p>
                     <button
                       onClick={handlePDFToExcel}
-                      disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
-                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
-                        file && file.type.startsWith('application/pdf')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
-                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
-                      }`}
+                      disabled={isLoading || !selectedPdfFile}
+                      className={getPrimaryButtonClass(Boolean(selectedPdfFile))}
                     >
                       {isLoading ? (
                         <><span className="animate-spin">⏳</span> Конвертация...</>
@@ -1043,10 +1294,10 @@ function PDFToolsContent() {
                         <button
                           key={format.value}
                           type="button"
-                          className={`relative rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                          className={`btn-ui relative justify-start rounded-xl border px-3 py-2.5 text-left transition-colors ${
                             convertFormat === format.value
                               ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
-                              : "border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700"
+                              : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
                           }`}
                           onClick={() => setConvertFormat(format.value)}
                         >
@@ -1063,12 +1314,8 @@ function PDFToolsContent() {
                     </div>
                     <button
                       onClick={handlePdfToZip}
-                      disabled={isLoading || !file || !file.type.startsWith("application/pdf")}
-                      className={`w-full mt-4 py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
-                        file && file.type.startsWith("application/pdf")
-                          ? "bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white"
-                          : "bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed"
-                      }`}
+                      disabled={isLoading || !selectedPdfFile}
+                      className={getPrimaryButtonClass(Boolean(selectedPdfFile), true)}
                     >
                       {isLoading ? (
                         <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> Создание архива...</>
@@ -1087,12 +1334,8 @@ function PDFToolsContent() {
                     </p>
                     <button
                       onClick={handleExtractText}
-                      disabled={isLoading || !file || !file.type.startsWith("application/pdf")}
-                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
-                        file && file.type.startsWith("application/pdf")
-                          ? "bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white"
-                          : "bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed"
-                      }`}
+                      disabled={isLoading || !selectedPdfFile}
+                      className={getPrimaryButtonClass(Boolean(selectedPdfFile))}
                     >
                       {isLoading ? (
                         <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> Извлечение...</>
@@ -1148,10 +1391,10 @@ function PDFToolsContent() {
                           key={pos.id}
                           type="button"
                           onClick={() => setSignaturePosition(pos.id)}
-                          className={`py-2 px-2 rounded-lg text-xs font-medium border transition-colors ${
+                          className={`btn-ui py-2 px-2 rounded-lg text-xs border transition-colors ${
                             signaturePosition === pos.id
                               ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                              : "border-stone-200 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-700"
+                              : "btn-secondary border-stone-200 dark:border-stone-600"
                           }`}
                         >
                           {pos.label}
@@ -1165,7 +1408,7 @@ function PDFToolsContent() {
                           key={c.value}
                           type="button"
                           onClick={() => setSignatureColor(c.value)}
-                          className={`w-8 h-8 rounded-lg border-2 transition-all ${
+                          className={`btn-ui btn-icon w-8 h-8 rounded-lg border-2 transition-all ${
                             signatureColor === c.value
                               ? "border-amber-500 ring-2 ring-amber-200 dark:ring-amber-800"
                               : "border-stone-200 dark:border-stone-600 hover:border-stone-400"
@@ -1177,12 +1420,8 @@ function PDFToolsContent() {
                     </div>
                     <button
                       onClick={handleAddSignature}
-                      disabled={isLoading || !file || !file.type.startsWith('application/pdf') || !signatureBlob}
-                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
-                        file && file.type.startsWith('application/pdf') && signatureBlob
-                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
-                          : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
-                      }`}
+                      disabled={isLoading || !selectedPdfFile || !signatureBlob}
+                      className={getPrimaryButtonClass(Boolean(selectedPdfFile && signatureBlob))}
                     >
                       {isLoading ? (
                         <><span className="animate-spin">⏳</span> Добавление подписи...</>
@@ -1206,10 +1445,10 @@ function PDFToolsContent() {
                         <button
                           key={compression.level}
                           onClick={() => setCompressionLevel(compression.level)}
-                          className={`flex-1 flex flex-col items-center p-2.5 rounded-lg border text-center transition-colors ${
+                          className={`btn-ui flex-1 flex flex-col items-center p-2.5 rounded-lg border text-center transition-colors ${
                             compressionLevel === compression.level
                               ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
-                              : "border-stone-200 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-700"
+                              : "btn-secondary border-stone-200 dark:border-stone-600"
                           }`}
                         >
                           <span className="text-xs font-medium text-stone-900 dark:text-white block">{compression.name}</span>
@@ -1220,7 +1459,7 @@ function PDFToolsContent() {
                     <button
                       onClick={handleCompress}
                       disabled={isLoading}
-                      className="w-full mt-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-400 text-stone-900 dark:text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2"
+                      className={getPrimaryButtonClass(!isLoading, true)}
                     >
                       {isLoading ? (
                         <>
@@ -1245,8 +1484,8 @@ function PDFToolsContent() {
                     </p>
                     <button
                       onClick={handleMerge}
-                      disabled={isLoading || !files || Array.from(files).filter((f) => f.type === 'application/pdf').length < 2}
-                      className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:bg-stone-300 dark:disabled:bg-stone-700 disabled:cursor-not-allowed text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                      disabled={isLoading || !hasAtLeastTwoPdfFiles}
+                      className={getPrimaryButtonClass(Boolean(!isLoading && hasAtLeastTwoPdfFiles))}
                     >
                       {isLoading ? (
                         <>
@@ -1258,6 +1497,40 @@ function PDFToolsContent() {
                         </>
                       ) : (
                         'Объединить PDF'
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Организовать страницы */}
+                {activeTab === "organizePages" && (
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4 space-y-4">
+                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white">Действия со страницами</h4>
+                    <p className="text-sm text-stone-600 dark:text-stone-400">
+                      Используйте режим просмотра слева: сортировка, поворот, удаление, обрезка и добавление пустых страниц.
+                    </p>
+                    <div className="space-y-1 text-xs text-stone-500 dark:text-stone-400">
+                      <p>Всего элементов в ленте: {organizerPages.length}</p>
+                      <p>Активных страниц: {organizerPages.filter((p) => !p.deleted).length}</p>
+                    </div>
+                    <button
+                      onClick={handleOrganizePages}
+                      disabled={isLoading || !selectedPdfFile || organizerPages.filter((p) => !p.deleted).length === 0 || !hasOrganizeChanges}
+                      className={getPrimaryButtonClass(
+                        Boolean(!isLoading && selectedPdfFile && organizerPages.filter((p) => !p.deleted).length > 0 && hasOrganizeChanges),
+                        true
+                      )}
+                    >
+                      {isLoading ? (
+                        <>
+                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                          </svg>
+                          Сохранение...
+                        </>
+                      ) : (
+                        "Применить изменения страниц"
                       )}
                     </button>
                   </div>
@@ -1276,10 +1549,10 @@ function PDFToolsContent() {
                           key={opt.mode}
                           type="button"
                           onClick={() => setSplitMode(opt.mode)}
-                          className={`flex-1 py-2 px-3 rounded-lg text-sm font-medium border transition-colors ${
+                          className={`btn-ui flex-1 py-2 px-3 rounded-lg text-sm border transition-colors ${
                             splitMode === opt.mode
                               ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                              : "border-stone-200 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-700"
+                              : "btn-secondary border-stone-200 dark:border-stone-600"
                           }`}
                         >
                           {opt.name}
@@ -1302,8 +1575,8 @@ function PDFToolsContent() {
                     )}
                     <button
                       onClick={handleSplit}
-                      disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
-                      className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:bg-stone-300 dark:disabled:bg-stone-700 disabled:cursor-not-allowed text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                      disabled={isLoading || !selectedPdfFile}
+                      className={getPrimaryButtonClass(Boolean(!isLoading && selectedPdfFile))}
                     >
                       {isLoading ? (
                         <>
@@ -1335,10 +1608,10 @@ function PDFToolsContent() {
                         <button
                           key={tool}
                           onClick={() => toggleEditTool(tool)}
-                          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-sm font-medium border transition-colors ${
+                          className={`btn-ui flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-sm border transition-colors ${
                             editTools.includes(tool)
                               ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                              : "border-stone-200 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-700"
+                              : "btn-secondary border-stone-200 dark:border-stone-600"
                           }`}
                         >
                           <Icon className="h-4 w-4" />
@@ -1356,10 +1629,10 @@ function PDFToolsContent() {
                               key={angle}
                               type="button"
                               onClick={() => setRotateAngle(angle)}
-                              className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${
+                              className={`btn-ui rounded-xl border px-2 py-2.5 text-center transition-colors ${
                                 rotateAngle === angle
                                   ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
-                                  : "border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700"
+                                  : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
                               }`}
                             >
                               <div className="flex items-center justify-center gap-1.5 text-sm font-semibold">
@@ -1389,7 +1662,7 @@ function PDFToolsContent() {
                     <button
                       onClick={handleEdit}
                       disabled={isLoading || (!hasPageRotations && !hasWatermark && !hasGlobalRotate)}
-                      className="w-full mt-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-400 disabled:opacity-60 text-stone-900 dark:text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2"
+                      className={getPrimaryButtonClass(Boolean(!isLoading && (hasPageRotations || hasWatermark || hasGlobalRotate)), true)}
                     >
                       {isLoading ? (
                         <>
@@ -1434,7 +1707,7 @@ function PDFToolsContent() {
                   <button
                     onClick={downloadAllAsZip}
                     disabled={isLoading}
-                    className="inline-flex items-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors"
+                    className="btn-ui bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-stone-900 dark:text-white"
                   >
                     <Download className="h-4 w-4 mr-1.5" />
                     Скачать все (ZIP)
@@ -1461,13 +1734,13 @@ function PDFToolsContent() {
                       <div className="flex space-x-2">
                         <button
                           onClick={() => downloadResult(result.url, result.name)}
-                          className="p-2 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
+                          className="btn-ui btn-icon btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
                         >
                           <Download className="h-5 w-5" />
                         </button>
                         <button
                           onClick={() => deleteResult(result.url, index)}
-                          className="p-2 text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
+                          className="btn-ui btn-icon btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
                         >
                           <Trash2 className="h-5 w-5" />
                         </button>
@@ -1492,7 +1765,7 @@ function PDFToolsContent() {
                       void navigator.clipboard.writeText(full);
                       showStatus("success", "Текст скопирован в буфер обмена", 3000);
                     }}
-                    className="inline-flex items-center px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors"
+                    className="btn-ui btn-primary"
                   >
                     Копировать всё
                   </button>
@@ -1517,14 +1790,14 @@ function PDFToolsContent() {
                   <div className="flex space-x-2">
                     <button
                       onClick={downloadCompressedFile}
-                      className="inline-flex items-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors"
+                      className="btn-ui bg-emerald-600 hover:bg-emerald-700 text-stone-900 dark:text-white"
                     >
                       <Download className="h-4 w-4 mr-1.5" />
                       Скачать
                     </button>
                     <button
                       onClick={deleteCompressResult}
-                      className="p-1.5 text-zinc-500 hover:text-red-600 dark:text-zinc-400 dark:hover:text-red-400 transition-colors"
+                      className="btn-ui btn-icon btn-ghost text-zinc-500 hover:text-red-600 dark:text-zinc-400 dark:hover:text-red-400"
                       title="Удалить результат"
                     >
                       <Trash2 className="h-5 w-5" />
