@@ -316,15 +316,31 @@ export async function mergePDFs(files: File[]): Promise<Blob> {
   return new Blob([new Uint8Array(mergedPdfBytes)], { type: 'application/pdf' });
 }
 
-// Функция для поворота страниц PDF
+// Функция для поворота страниц PDF (все страницы на один угол)
 export async function rotatePDF(file: File, angle: 90 | 180 | 270): Promise<Blob> {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer);
   const pages = pdfDoc.getPages();
   
   for (const page of pages) {
-    const { width, height } = page.getSize();
     page.setRotation(degrees(angle));
+  }
+  
+  const pdfBytes = await pdfDoc.save();
+  return new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
+}
+
+/** Поворот страниц PDF по отдельности. rotations[i] — угол для страницы i (0, 90, 180, 270). */
+export async function rotatePDFPages(file: File, rotations: number[]): Promise<Blob> {
+  const arrayBuffer = await file.arrayBuffer();
+  const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pages = pdfDoc.getPages();
+  
+  for (let i = 0; i < pages.length; i++) {
+    const angle = rotations[i] ?? 0;
+    if (angle !== 0) {
+      pages[i].setRotation(degrees(angle as 0 | 90 | 180 | 270));
+    }
   }
   
   const pdfBytes = await pdfDoc.save();
@@ -358,8 +374,8 @@ export async function splitPDFIntoPages(file: File): Promise<Blob[]> {
   return splitPDF(file, pageNumbers.map((n) => n + 1));
 }
 
-// Извлечение текста из PDF (pdf.js)
-async function extractTextFromPDF(file: File): Promise<{ pageNum: number; text: string }[]> {
+// Извлечение текста из PDF (pdf.js) — экспорт для инструмента «Извлечь текст»
+export async function extractTextFromPDF(file: File): Promise<{ pageNum: number; text: string }[]> {
   if (typeof window === 'undefined') throw new Error('Доступно только в браузере');
   const pdfjsLib = await import('pdfjs-dist');
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@5.4.530/build/pdf.worker.mjs`;

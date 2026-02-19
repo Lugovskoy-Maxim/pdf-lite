@@ -235,7 +235,7 @@ export function SignaturePreview({
                 onClick={() => onPageChange(p)}
                 className={`w-8 h-8 rounded text-sm font-medium ${
                   previewPage === p
-                    ? "bg-amber-500 text-white"
+                    ? "bg-amber-500 text-stone-900 dark:text-white"
                     : "bg-stone-200 dark:bg-stone-700 hover:bg-stone-300 dark:hover:bg-stone-600"
                 }`}
               >

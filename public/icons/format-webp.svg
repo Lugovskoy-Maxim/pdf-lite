@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none">
+  <rect x="4" y="6" width="56" height="52" rx="12" fill="#DCFCE7"/>
+  <rect x="9" y="11" width="46" height="30" rx="8" fill="#86EFAC"/>
+  <path d="M15 32L25 23L32 29L38 24L49 40H15V32Z" fill="#14532D"/>
+  <circle cx="22" cy="20" r="3.5" fill="#F0FDF4"/>
+  <path d="M36 18L38 22L42 23L39 26L40 30L36 28L32 30L33 26L30 23L34 22L36 18Z" fill="#16A34A"/>
+  <rect x="13" y="44" width="38" height="10" rx="5" fill="#16A34A"/>
+  <text x="32" y="51" text-anchor="middle" font-size="8" font-family="Arial, sans-serif" font-weight="700" fill="white">WEBP</text>
+</svg>

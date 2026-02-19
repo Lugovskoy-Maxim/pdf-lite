@@ -1,21 +1,99 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, convertImagesToPDF, createZipFromImages, convertPDFToWord, convertPDFToExcel, addSignature, getPDFPageCount, type SignaturePosition } from "./utils/pdfUtils";
-import { Upload, X, Download, Trash2, FileText, Shield, Zap, Image, Merge, SplitSquareVertical, RotateCw, FileDown, CheckCircle2, XCircle, ImagePlus, Shrink, FileType, Table, PenLine } from 'lucide-react';
+import { useState, useRef, useEffect, useMemo, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, rotatePDFPages, convertImagesToPDF, createZipFromImages, convertPDFToWord, convertPDFToExcel, addSignature, getPDFPageCount, extractTextFromPDF, type SignaturePosition } from "./utils/pdfUtils";
+import { Upload, X, Download, Trash2, FileText, Shield, Zap, Image, RotateCw, CheckCircle2, XCircle, Shrink, ChevronRight } from 'lucide-react';
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { SignaturePad, SIGNATURE_COLORS } from "../components/SignaturePad";
 import { SignaturePreview } from "../components/SignaturePreview";
-import { PDFToolsPanel } from "../components/PDFToolsPanel";
+import { PDFEditPreview } from "../components/PDFEditPreview";
+import { TOOLS, TOOL_CATEGORIES, getToolById } from "./tools-config";
 
-export default function PDFTools() {
-  const [activeTab, setActiveTab] = useState("pdfToImage");
+const TAB_IDS = ["pdfToImage", "imageToPdf", "pdfToWord", "pdfToExcel", "merge", "split", "signature", "edit", "compress", "pdfToZip", "extractText"] as const;
+
+const IMAGE_FORMAT_OPTIONS = [
+  { value: "JPG", title: "JPG", hint: "Меньше размер", icon: "/icons/format-jpg.svg" },
+  { value: "PNG", title: "PNG", hint: "Без потерь", icon: "/icons/format-png.svg" },
+  { value: "WebP", title: "WebP", hint: "Современный", icon: "/icons/format-webp.svg" },
+] as const;
+
+const TOOL_BUTTON_LABELS: Record<string, string> = {
+  pdfToImage: "PDF в картинки",
+  imageToPdf: "Картинки в PDF",
+  pdfToWord: "PDF в Word",
+  pdfToExcel: "PDF в Excel",
+  merge: "Объединить",
+  split: "Разделить",
+  signature: "Подпись",
+  edit: "Редактировать",
+  compress: "Сжать",
+  pdfToZip: "PDF в ZIP",
+  extractText: "Извлечь текст",
+};
+
+const ICON_BADGE_STYLES: Record<string, string> = {
+  pdfToImage: "bg-sky-100 dark:bg-sky-900/40",
+  imageToPdf: "bg-rose-100 dark:bg-rose-900/40",
+  pdfToWord: "bg-blue-100 dark:bg-blue-900/40",
+  pdfToExcel: "bg-emerald-100 dark:bg-emerald-900/40",
+  merge: "bg-orange-100 dark:bg-orange-900/40",
+  split: "bg-violet-100 dark:bg-violet-900/40",
+  signature: "bg-fuchsia-100 dark:bg-fuchsia-900/40",
+  edit: "bg-cyan-100 dark:bg-cyan-900/40",
+  compress: "bg-lime-100 dark:bg-lime-900/40",
+  pdfToZip: "bg-amber-100 dark:bg-amber-900/40",
+  extractText: "bg-teal-100 dark:bg-teal-900/40",
+};
+
+function getIconBadgeStyle(toolId: string) {
+  return ICON_BADGE_STYLES[toolId] ?? "bg-amber-100 dark:bg-amber-900/40";
+}
+
+function getToolButtonLabel(toolId: string, fallbackTitle: string) {
+  return TOOL_BUTTON_LABELS[toolId] ?? fallbackTitle;
+}
+
+function PDFToolsContent() {
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const toolFromUrl = useMemo(() => searchParams.get("tool"), [searchParams]);
+  const standalone = searchParams.get("standalone") === "1";
+  const initialTabFromUrl = useMemo(() => {
+    if (toolFromUrl && TAB_IDS.includes(toolFromUrl as (typeof TAB_IDS)[number])) return toolFromUrl;
+    return null;
+  }, [toolFromUrl]);
+
+  const [activeTab, setActiveTab] = useState<string>(initialTabFromUrl ?? "pdfToImage");
+  const [categoryFilter, setCategoryFilter] = useState<string>("all");
+
+  // Редирект ?tool=xxx на отдельную страницу инструмента (только когда не standalone и не в iframe)
+  useEffect(() => {
+    if (standalone || !initialTabFromUrl) return;
+    const tool = getToolById(initialTabFromUrl);
+    if (tool?.path && typeof window !== "undefined" && window.self === window.top) {
+      router.replace(`/${tool.path}`, { scroll: true });
+    }
+  }, [initialTabFromUrl, router, standalone]);
+
+  useEffect(() => {
+    if (initialTabFromUrl) setActiveTab(initialTabFromUrl);
+  }, [initialTabFromUrl]);
+
+  const filteredTools = useMemo(() => {
+    if (categoryFilter === "all") return [...TOOLS];
+    return TOOLS.filter((t) => t.category === categoryFilter);
+  }, [categoryFilter]);
+  const activeToolMeta = useMemo(() => getToolById(activeTab), [activeTab]);
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [fileName, setFileName] = useState("");
   const [convertFormat, setConvertFormat] = useState("");
   const [compressionLevel, setCompressionLevel] = useState("medium");
   const [editTools, setEditTools] = useState<string[]>([]);
+  const [editPageRotations, setEditPageRotations] = useState<number[]>([]);
   const [file, setFile] = useState<File | null>(null);
   const [files, setFiles] = useState<FileList | null>(null);
   const [watermarkText, setWatermarkText] = useState("ВОДЯНОЙ ЗНАК");
@@ -32,8 +110,35 @@ export default function PDFTools() {
   const [signaturePreviewPage, setSignaturePreviewPage] = useState(1);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
+  const [extractedText, setExtractedText] = useState<{ pageNum: number; text: string }[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
+  const [previewUrls, setPreviewUrls] = useState<(string | null)[]>([]);
+
+  const fileList = useMemo(() => {
+    if (files && files.length > 0) return Array.from(files);
+    if (file) return [file];
+    return [];
+  }, [files, file]);
+
+  useEffect(() => {
+    const list = files && files.length > 0 ? Array.from(files) : file ? [file] : [];
+    if (list.length === 0) {
+      setPreviewUrls([]);
+      return;
+    }
+    const urls: (string | null)[] = list.map((f) =>
+      f.type.startsWith("image/") ? URL.createObjectURL(f) : null
+    );
+    setPreviewUrls(urls);
+    return () => urls.forEach((u) => u && URL.revokeObjectURL(u));
+  }, [files, file]);
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files;
@@ -43,9 +148,13 @@ export default function PDFTools() {
       const f = selectedFiles[0];
       setFile(f);
       if (f.type.startsWith("application/pdf")) {
-        getPDFPageCount(f).then(setPdfPageCount);
+        getPDFPageCount(f).then((n) => {
+          setPdfPageCount(n);
+          setEditPageRotations(Array(n).fill(0));
+        });
       } else {
         setPdfPageCount(0);
+        setEditPageRotations([]);
       }
     }
   };
@@ -59,9 +168,13 @@ export default function PDFTools() {
       const f = droppedFiles[0];
       setFile(f);
       if (f.type.startsWith("application/pdf")) {
-        getPDFPageCount(f).then(setPdfPageCount);
+        getPDFPageCount(f).then((n) => {
+          setPdfPageCount(n);
+          setEditPageRotations(Array(n).fill(0));
+        });
       } else {
         setPdfPageCount(0);
+        setEditPageRotations([]);
       }
     }
   };
@@ -75,8 +188,10 @@ export default function PDFTools() {
     setFiles(null);
     setFileName("");
     setPdfPageCount(0);
+    setEditPageRotations([]);
     setConversionResults([]);
     setCompressResult(null);
+    setExtractedText(null);
     setSignaturePdfPosition(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
@@ -295,6 +410,55 @@ export default function PDFTools() {
     }
   };
 
+  const handlePdfToZip = async () => {
+    if (!file || !file.type.startsWith("application/pdf")) {
+      showStatus("error", "Выберите PDF файл");
+      return;
+    }
+    const format = convertFormat || "PNG";
+    setIsLoading(true);
+    setStatusMessage({ type: "success", text: "Создание архива..." });
+    try {
+      const images = await convertPDFToImages(file, format);
+      const items = images.map((blob, i) => ({
+        blob,
+        name: `page-${i + 1}.${format.toLowerCase()}`,
+      }));
+      const zipBlob = await createZipFromImages(items);
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${fileName.replace(/\.pdf$/i, "")}-pages.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showStatus("success", `Архив со ${images.length} страниц(ой) скачан`, 5000);
+    } catch (error) {
+      showStatus("error", "Ошибка: " + (error as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleExtractText = async () => {
+    if (!file || !file.type.startsWith("application/pdf")) {
+      showStatus("error", "Выберите PDF файл");
+      return;
+    }
+    setIsLoading(true);
+    setStatusMessage({ type: "success", text: "Извлечение текста..." });
+    try {
+      const pages = await extractTextFromPDF(file);
+      setExtractedText(pages);
+      showStatus("success", "Текст извлечён", 5000);
+    } catch (error) {
+      showStatus("error", "Ошибка: " + (error as Error).message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleAddSignature = async () => {
     if (!file || !file.type.startsWith('application/pdf')) {
       showStatus('error', 'Выберите PDF файл');
@@ -339,38 +503,46 @@ export default function PDFTools() {
     }
   };
 
+  const hasPageRotations = editPageRotations.some((r) => r !== 0);
+  const hasWatermark = editTools.includes("Водяной знак");
+  const hasGlobalRotate = editTools.includes("Повернуть");
+
   const handleEdit = async () => {
-    if (!file) {
-      showStatus('error', 'Пожалуйста, выберите PDF файл для редактирования');
+    if (!file || !file.type.startsWith("application/pdf")) {
+      showStatus("error", "Пожалуйста, выберите PDF файл для редактирования");
       return;
     }
 
-    if (editTools.length === 0) {
-      showStatus('error', 'Пожалуйста, выберите инструменты редактирования');
+    if (!hasPageRotations && !hasWatermark && !hasGlobalRotate) {
+      showStatus("error", "Поверните страницы в превью и/или выберите водяной знак или поворот всех");
       return;
     }
 
     setIsLoading(true);
-    setStatusMessage({ type: 'success', text: 'Редактирование файла...' });
+    setStatusMessage({ type: "success", text: "Редактирование файла..." });
 
     try {
       let resultFile: Blob = file;
       let resultName = fileName;
 
-      if (editTools.includes("Водяной знак")) {
-        resultFile = await addWatermark(new File([resultFile], resultName), watermarkText);
-        resultName = `watermarked-${resultName}`;
+      if (hasPageRotations) {
+        resultFile = await rotatePDFPages(new File([resultFile], resultName), editPageRotations);
+        resultName = `rotated-${resultName}`;
       }
-      if (editTools.includes("Повернуть")) {
+      if (hasGlobalRotate) {
         resultFile = await rotatePDF(new File([resultFile], resultName), rotateAngle);
         resultName = `rotated-${resultName}`;
+      }
+      if (hasWatermark) {
+        resultFile = await addWatermark(new File([resultFile], resultName), watermarkText);
+        resultName = `watermarked-${resultName}`;
       }
 
       const url = URL.createObjectURL(resultFile);
       setConversionResults([{ blob: resultFile, url, name: resultName }]);
-      showStatus('success', `Редактирование ${fileName} завершено!`, 5000);
+      showStatus("success", `Редактирование ${fileName} завершено!`, 5000);
     } catch (error) {
-      showStatus('error', 'Ошибка при редактировании файла: ' + (error as Error).message);
+      showStatus("error", "Ошибка при редактировании файла: " + (error as Error).message);
     } finally {
       setIsLoading(false);
     }
@@ -445,73 +617,133 @@ export default function PDFTools() {
 
   return (
     <div className="min-h-screen flex flex-col">
-      <Header />
+      {!standalone && <Header />}
       <main className="flex-1">
+        {!standalone && (
+        <>
         {/* Hero */}
-        <section className="relative py-16 md:py-24 overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-b from-amber-50/50 dark:from-amber-950/20 to-transparent" />
-          <div className="absolute top-20 left-10 w-72 h-72 bg-amber-200/30 dark:bg-amber-800/20 rounded-full blur-3xl" />
-          <div className="absolute bottom-10 right-10 w-96 h-96 bg-amber-100/40 dark:bg-amber-900/20 rounded-full blur-3xl" />
+        <section className="relative py-14 md:py-20 overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-b from-amber-50/70 dark:from-amber-950/25 via-transparent to-transparent" aria-hidden />
           <div className="relative max-w-4xl mx-auto px-4 sm:px-6 text-center">
-            <h1 className="text-4xl md:text-5xl lg:text-6xl font-bold text-stone-900 dark:text-white tracking-tight">
-              Работайте с PDF
-              <span className="block text-amber-600 dark:text-amber-400 mt-1">просто и быстро</span>
+            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-stone-900 dark:text-white tracking-tight leading-tight text-balance">
+              Онлайн-инструменты для PDF
             </h1>
-            <p className="mt-6 text-lg text-stone-600 dark:text-stone-400 max-w-2xl mx-auto">
-              Конвертируйте, объединяйте, разделяйте и сжимайте PDF файлы онлайн. Без регистрации и без загрузки на сервер.
+            <p className="mt-5 text-base md:text-lg text-stone-600 dark:text-stone-400 max-w-2xl mx-auto leading-relaxed text-balance">
+              Объединяйте, сжимайте, конвертируйте и редактируйте PDF без установки. Всё в браузере и бесплатно.
             </p>
-            <div className="mt-8 flex flex-wrap justify-center gap-3" id="trust-badges">
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 text-sm font-medium border border-emerald-200 dark:border-emerald-800">
-                <Shield className="h-4 w-4" />
-                Файлы остаются в браузере
-              </div>
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-400 text-sm font-medium border border-amber-200 dark:border-amber-800">
+            <div className="mt-8 flex flex-wrap justify-center gap-3">
+              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white dark:bg-stone-800/80 text-stone-700 dark:text-stone-300 text-sm font-medium border border-stone-200 dark:border-stone-700 shadow-sm">
+                <Shield className="h-4 w-4 text-emerald-500" />
+                Файлы не покидают браузер
+              </span>
+              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500 text-stone-900 text-sm font-medium shadow-sm">
                 <Zap className="h-4 w-4" />
-                Работает бесплатно
-              </div>
+                Бесплатно
+              </span>
             </div>
           </div>
         </section>
 
-        {/* Tools */}
-        <section id="tools" className="py-8 md:py-12 px-4 sm:px-6">
-          <div className="max-w-5xl mx-auto">
-            <div className="text-center mb-10">
-              <h2 className="text-2xl md:text-3xl font-bold text-stone-900 dark:text-white">
-                Выберите инструмент
-              </h2>
-              <p className="mt-2 text-stone-600 dark:text-stone-400">
-                Загрузите файлы и начните работу
-              </p>
-            </div>
-
-        <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-xl shadow-stone-200/50 dark:shadow-none border border-stone-200 dark:border-stone-800 overflow-hidden">
-          {/* Панель инструментов — горизонтальные вкладки */}
-          <div className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/50 dark:bg-stone-900/50 px-4 py-3">
-            <p className="text-xs font-medium text-stone-500 dark:text-stone-400 mb-3 uppercase tracking-wider">Выберите инструмент</p>
-            <div className="flex flex-wrap gap-2">
-              {[
-                { id: "pdfToImage" as const, icon: Image, label: "PDF в картинки" },
-                { id: "imageToPdf" as const, icon: ImagePlus, label: "Картинки в PDF" },
-                { id: "pdfToWord" as const, icon: FileType, label: "PDF в Word" },
-                { id: "pdfToExcel" as const, icon: Table, label: "PDF в Excel" },
-                { id: "merge" as const, icon: Merge, label: "Объединить" },
-                { id: "split" as const, icon: SplitSquareVertical, label: "Разделить" },
-                { id: "signature" as const, icon: PenLine, label: "Подпись" },
-                { id: "edit" as const, icon: RotateCw, label: "Редактировать" },
-                { id: "compress" as const, icon: Shrink, label: "Сжать" },
-              ].map((tab) => (
+        {/* Категории и сетка инструментов */}
+        <section id="tools" className="py-4 px-4 sm:px-6 scroll-mt-20">
+          <div className="max-w-6xl mx-auto">
+            <div className="flex flex-wrap gap-2 justify-center mb-8">
+              {TOOL_CATEGORIES.map((cat) => (
                 <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-all ${
-                    activeTab === tab.id
-                      ? "bg-amber-500 text-white shadow-sm"
-                      : "bg-white dark:bg-stone-800 text-stone-600 dark:text-stone-400 hover:bg-stone-100 dark:hover:bg-stone-700 border border-stone-200 dark:border-stone-700"
+                  key={cat.id}
+                  onClick={() => setCategoryFilter(cat.id)}
+                  className={`px-4 py-2.5 rounded-full text-sm font-medium transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
+                    categoryFilter === cat.id
+                      ? "bg-amber-500 text-stone-900 shadow-md shadow-amber-500/25"
+                      : "bg-white dark:bg-stone-800/80 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600"
                   }`}
                 >
-                  <tab.icon className="h-4 w-4 shrink-0" />
-                  {tab.label}
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
+              {filteredTools.map((tool) => {
+                const title = tool.title.split(" — ")[0];
+                return (
+                  <Link
+                    key={tool.id}
+                    href={`/${tool.path}`}
+                    className="group relative text-left p-6 rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 hover:border-amber-300 dark:hover:border-amber-700 hover:shadow-xl hover:shadow-stone-200/50 dark:hover:shadow-none hover:-translate-y-0.5 transition-all duration-200 block focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 focus:border-transparent"
+                  >
+                    <div
+                      className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-4 overflow-hidden ring-1 ring-inset ring-white/70 dark:ring-stone-700 ${getIconBadgeStyle(tool.id)}`}
+                    >
+                      <img
+                        src={`/icons/${tool.id}.svg`}
+                        alt=""
+                        className="w-8 h-8 object-contain"
+                        width={56}
+                        height={56}
+                      />
+                    </div>
+                    <h3 className="font-semibold text-stone-900 dark:text-white text-lg">{title}</h3>
+                    <p className="mt-2 text-sm text-stone-500 dark:text-stone-400 line-clamp-2 leading-snug">
+                      {tool.shortDescription}
+                    </p>
+                    <span className="inline-flex items-center gap-1.5 mt-4 text-sm font-medium text-amber-600 dark:text-amber-400 opacity-80 group-hover:opacity-100 transition-opacity">
+                      Открыть
+                      <ChevronRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+        </>
+        )}
+
+        {/* Блок работы с инструментом — только standalone для страницы инструмента */}
+        {standalone && (
+        <section className="py-8 md:py-12 px-4 sm:px-6 pt-6">
+          <div className="max-w-5xl mx-auto">
+            <div className="mb-8">
+              <h2 id="tools-heading" className="text-2xl font-bold text-stone-900 dark:text-white">
+                Работа с файлами
+              </h2>
+              <p className="mt-2 text-stone-600 dark:text-stone-400">
+                Загрузите файл, настройте параметры и получите результат за пару кликов.
+              </p>
+              {activeToolMeta && (
+                <div className="mt-4 flex items-center gap-3 rounded-xl border border-stone-200 bg-white p-3 dark:border-stone-700 dark:bg-stone-900">
+                  <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${getIconBadgeStyle(activeToolMeta.id)}`}>
+                    <img src={`/icons/${activeToolMeta.id}.svg`} alt="" className="h-6 w-6 object-contain" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
+                      {activeToolMeta.title.split(" — ")[0]}
+                    </p>
+                    <p className="text-xs text-stone-500 dark:text-stone-400">{activeToolMeta.shortDescription}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+        <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-lg shadow-stone-200/40 dark:shadow-none border border-stone-200 dark:border-stone-800 overflow-hidden">
+          <div className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/80 dark:bg-stone-900/80 px-4 sm:px-6 py-4">
+            <p className="text-xs font-semibold text-stone-500 dark:text-stone-400 mb-3 uppercase tracking-wider">Инструменты</p>
+            <div className="flex flex-wrap gap-2">
+              {TOOLS.map((tool) => (
+                <button
+                  key={tool.id}
+                  type="button"
+                  onClick={() => setActiveTab(tool.id)}
+                  className={`inline-flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all border focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
+                    activeTab === tool.id
+                      ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-stone-900 dark:text-stone-100 shadow-sm"
+                      : "border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800 text-stone-600 dark:text-stone-300 hover:bg-stone-100 dark:hover:bg-stone-700"
+                  }`}
+                >
+                  <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${getIconBadgeStyle(tool.id)}`}>
+                    <img src={`/icons/${tool.id}.svg`} alt="" className="h-4 w-4 object-contain" />
+                  </span>
+                  <span>{getToolButtonLabel(tool.id, tool.title.split(" — ")[0])}</span>
                 </button>
               ))}
             </div>
@@ -519,6 +751,23 @@ export default function PDFTools() {
 
           {/* Основной контент */}
           <div className="p-6">
+            <div className="mb-6 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+              {[
+                { step: "1", label: "Загрузите файл" },
+                { step: "2", label: "Настройте параметры" },
+                { step: "3", label: "Скачайте результат" },
+              ].map((item) => (
+                <div
+                  key={item.step}
+                  className="flex items-center gap-3 rounded-lg border border-stone-200 bg-stone-50/70 px-3 py-2.5 dark:border-stone-700 dark:bg-stone-800/50"
+                >
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-xs font-semibold text-stone-900 dark:text-white">
+                    {item.step}
+                  </span>
+                  <span className="font-medium text-stone-700 dark:text-stone-200">{item.label}</span>
+                </div>
+              ))}
+            </div>
             <div className="flex flex-col lg:flex-row gap-6 mb-6">
               {/* Область загрузки + подпись (при выборе вкладки Подпись) */}
               <div className="flex-1 flex flex-col gap-4">
@@ -550,38 +799,84 @@ export default function PDFTools() {
                         ? "PDF файлы (2 и более)"
                         : activeTab === "imageToPdf"
                         ? "JPG, PNG, WebP"
-                        : activeTab === "signature" || activeTab === "pdfToWord" || activeTab === "pdfToExcel"
+                        : activeTab === "signature" || activeTab === "pdfToWord" || activeTab === "pdfToExcel" || activeTab === "pdfToZip" || activeTab === "extractText"
                         ? "PDF файл"
                         : "PDF или изображения"}
                     </p>
                   </div>
                   <button
                     onClick={triggerFileInput}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg text-white bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 transition-colors"
+                    className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-medium rounded-lg text-stone-900 dark:text-white bg-amber-500 hover:bg-amber-600 dark:bg-amber-600 dark:hover:bg-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 transition-colors"
                   >
                     <Upload className="h-4 w-4" />
                     Выбрать файлы
                   </button>
-                  {(fileName || (files && files.length > 0)) && (
-                    <div className="flex items-center justify-center gap-2">
-                      <p className="text-sm text-stone-500 dark:text-stone-400">
-                        {files && files.length > 1 ? (
-                          <>Выбрано: <span className="font-medium text-stone-700 dark:text-stone-300">{files.length} файлов</span></>
-                        ) : (
-                          <>Файл: <span className="font-medium text-stone-700 dark:text-stone-300 truncate max-w-[180px] inline-block align-bottom">{fileName}</span></>
-                        )}
-                      </p>
-                      <button
-                        onClick={handleClearFile}
-                        className="p-1.5 rounded-md text-stone-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors"
-                        title="Очистить"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
+                  {fileList.length > 0 && (
+                    <div className="mt-4 w-full">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium text-stone-600 dark:text-stone-400">
+                          Загружено файлов: {fileList.length}
+                        </span>
+                        <button
+                          onClick={handleClearFile}
+                          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm text-stone-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50 transition-colors"
+                          title="Удалить все"
+                        >
+                          <X className="h-4 w-4" />
+                          Очистить
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[220px] overflow-y-auto pr-1">
+                        {fileList.map((f, index) => {
+                          const isPdf = f.type.startsWith("application/pdf");
+                          const previewUrl = previewUrls[index] ?? null;
+                          return (
+                            <div
+                              key={`${f.name}-${index}`}
+                              className="relative group rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/80 overflow-hidden shadow-sm hover:shadow-md transition-shadow"
+                            >
+                              <div className="aspect-square flex items-center justify-center bg-stone-100 dark:bg-stone-800 min-h-[80px]">
+                                {previewUrl ? (
+                                  <img
+                                    src={previewUrl}
+                                    alt=""
+                                    className="w-full h-full object-cover"
+                                  />
+                                ) : isPdf ? (
+                                  <div className="p-3 rounded-lg bg-red-100 dark:bg-red-900/30">
+                                    <FileText className="h-8 w-8 text-red-600 dark:text-red-400" />
+                                  </div>
+                                ) : (
+                                  <div className="p-3 rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                                    <Image className="h-8 w-8 text-amber-600 dark:text-amber-400" />
+                                  </div>
+                                )}
+                              </div>
+                              <div className="p-2 border-t border-stone-100 dark:border-stone-700">
+                                <p className="text-xs font-medium text-stone-800 dark:text-stone-200 truncate" title={f.name}>
+                                  {f.name}
+                                </p>
+                                <p className="text-[10px] text-stone-500 dark:text-stone-400">
+                                  {formatFileSize(f.size)}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
                     </div>
                   )}
                 </div>
               </div>
+
+              {activeTab === "edit" && file && file.type.startsWith("application/pdf") && pdfPageCount > 0 && (
+                <PDFEditPreview
+                  pdfFile={file}
+                  pageRotations={editPageRotations}
+                  onPageRotationsChange={setEditPageRotations}
+                  pageCount={pdfPageCount}
+                />
+              )}
 
               {activeTab === "signature" && (
                 <div className="space-y-4">
@@ -619,19 +914,26 @@ export default function PDFTools() {
                 {activeTab === "pdfToImage" && (
                   <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
                     <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Формат вывода</h4>
-                    <div className="flex flex-wrap gap-2">
-                      {["JPG", "PNG", "WebP"].map((format) => (
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {IMAGE_FORMAT_OPTIONS.map((format) => (
                         <button
-                          key={format}
-                          className={`flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-sm font-medium border transition-colors ${
-                            convertFormat === format
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                              : "border-stone-200 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-700"
+                          key={format.value}
+                          type="button"
+                          className={`relative rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                            convertFormat === format.value
+                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
+                              : "border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700"
                           }`}
-                          onClick={() => setConvertFormat(format)}
+                          onClick={() => setConvertFormat(format.value)}
                         >
-                          <span className="w-6 h-6 rounded bg-stone-200 dark:bg-stone-600 flex items-center justify-center text-[10px] font-bold">{format[0]}</span>
-                          {format}
+                          {convertFormat === format.value && (
+                            <CheckCircle2 className="absolute right-2.5 top-2.5 h-4 w-4 text-amber-600 dark:text-amber-300" />
+                          )}
+                          <div className="flex items-center gap-2">
+                            <img src={format.icon} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
+                            <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">{format.title}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{format.hint}</p>
                         </button>
                       ))}
                     </div>
@@ -640,7 +942,7 @@ export default function PDFTools() {
                       disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
                       className={`w-full mt-4 py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
                         file && file.type.startsWith('application/pdf')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
                           : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
                       }`}
                     >
@@ -665,7 +967,7 @@ export default function PDFTools() {
                       disabled={isLoading || !file || !file.type.startsWith('image/')}
                       className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
                         file && file.type.startsWith('image/')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
                           : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
                       }`}
                     >
@@ -695,7 +997,7 @@ export default function PDFTools() {
                       disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
                       className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
                         file && file.type.startsWith('application/pdf')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
                           : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
                       }`}
                     >
@@ -719,7 +1021,7 @@ export default function PDFTools() {
                       disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
                       className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
                         file && file.type.startsWith('application/pdf')
-                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
                           : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
                       }`}
                     >
@@ -727,6 +1029,75 @@ export default function PDFTools() {
                         <><span className="animate-spin">⏳</span> Конвертация...</>
                       ) : (
                         'Сохранить как Excel (.xlsx)'
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* PDF в ZIP */}
+                {activeTab === "pdfToZip" && (
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
+                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Формат изображений в архиве</h4>
+                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                      {IMAGE_FORMAT_OPTIONS.map((format) => (
+                        <button
+                          key={format.value}
+                          type="button"
+                          className={`relative rounded-xl border px-3 py-2.5 text-left transition-colors ${
+                            convertFormat === format.value
+                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
+                              : "border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700"
+                          }`}
+                          onClick={() => setConvertFormat(format.value)}
+                        >
+                          {convertFormat === format.value && (
+                            <CheckCircle2 className="absolute right-2.5 top-2.5 h-4 w-4 text-amber-600 dark:text-amber-300" />
+                          )}
+                          <div className="flex items-center gap-2">
+                            <img src={format.icon} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
+                            <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">{format.title}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{format.hint}</p>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={handlePdfToZip}
+                      disabled={isLoading || !file || !file.type.startsWith("application/pdf")}
+                      className={`w-full mt-4 py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
+                        file && file.type.startsWith("application/pdf")
+                          ? "bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white"
+                          : "bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed"
+                      }`}
+                    >
+                      {isLoading ? (
+                        <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> Создание архива...</>
+                      ) : (
+                        <>Скачать страницы как ZIP</>
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Извлечь текст */}
+                {activeTab === "extractText" && (
+                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
+                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">
+                      Извлечёт текст со всех страниц. Подходит для текстовых PDF (не для сканов).
+                    </p>
+                    <button
+                      onClick={handleExtractText}
+                      disabled={isLoading || !file || !file.type.startsWith("application/pdf")}
+                      className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
+                        file && file.type.startsWith("application/pdf")
+                          ? "bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white"
+                          : "bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed"
+                      }`}
+                    >
+                      {isLoading ? (
+                        <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> Извлечение...</>
+                      ) : (
+                        "Извлечь текст"
                       )}
                     </button>
                   </div>
@@ -809,7 +1180,7 @@ export default function PDFTools() {
                       disabled={isLoading || !file || !file.type.startsWith('application/pdf') || !signatureBlob}
                       className={`w-full py-2.5 text-sm font-medium rounded-lg flex items-center justify-center gap-2 ${
                         file && file.type.startsWith('application/pdf') && signatureBlob
-                          ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                          ? 'bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white'
                           : 'bg-stone-200 dark:bg-stone-700 text-stone-500 cursor-not-allowed'
                       }`}
                     >
@@ -849,7 +1220,7 @@ export default function PDFTools() {
                     <button
                       onClick={handleCompress}
                       disabled={isLoading}
-                      className="w-full mt-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-400 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2"
+                      className="w-full mt-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-400 text-stone-900 dark:text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2"
                     >
                       {isLoading ? (
                         <>
@@ -875,7 +1246,7 @@ export default function PDFTools() {
                     <button
                       onClick={handleMerge}
                       disabled={isLoading || !files || Array.from(files).filter((f) => f.type === 'application/pdf').length < 2}
-                      className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:bg-stone-300 dark:disabled:bg-stone-700 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                      className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:bg-stone-300 dark:disabled:bg-stone-700 disabled:cursor-not-allowed text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                     >
                       {isLoading ? (
                         <>
@@ -932,7 +1303,7 @@ export default function PDFTools() {
                     <button
                       onClick={handleSplit}
                       disabled={isLoading || !file || !file.type.startsWith('application/pdf')}
-                      className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:bg-stone-300 dark:disabled:bg-stone-700 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
+                      className="w-full py-2 px-3 bg-amber-500 hover:bg-amber-600 disabled:bg-stone-300 dark:disabled:bg-stone-700 disabled:cursor-not-allowed text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors flex items-center justify-center gap-2"
                     >
                       {isLoading ? (
                         <>
@@ -953,6 +1324,9 @@ export default function PDFTools() {
                 {activeTab === "edit" && (
                   <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4 space-y-4">
                     <h4 className="text-sm font-semibold text-stone-900 dark:text-white">Действия</h4>
+                    <p className="text-xs text-stone-500 dark:text-stone-400">
+                      В превью слева поворачивайте страницы по одной. Здесь — поворот всех или водяной знак.
+                    </p>
                     <div className="flex gap-2">
                       {[
                         { tool: "Повернуть", icon: RotateCw },
@@ -976,18 +1350,25 @@ export default function PDFTools() {
                     {editTools.includes("Повернуть") && (
                       <div>
                         <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-2">Угол поворота</label>
-                        <div className="flex gap-2">
+                        <div className="grid grid-cols-3 gap-2">
                           {([90, 180, 270] as const).map((angle) => (
                             <button
                               key={angle}
+                              type="button"
                               onClick={() => setRotateAngle(angle)}
-                              className={`flex-1 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                              className={`rounded-xl border px-2 py-2.5 text-center transition-colors ${
                                 rotateAngle === angle
-                                  ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                                  : "border-stone-200 dark:border-stone-600 hover:bg-stone-100 dark:hover:bg-stone-700"
+                                  ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+                                  : "border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800 hover:bg-stone-100 dark:hover:bg-stone-700"
                               }`}
                             >
-                              {angle}°
+                              <div className="flex items-center justify-center gap-1.5 text-sm font-semibold">
+                                <RotateCw className="h-3.5 w-3.5" />
+                                {angle}°
+                              </div>
+                              <p className="mt-0.5 text-[10px] text-stone-500 dark:text-stone-400">
+                                {angle === 90 ? "вправо" : angle === 180 ? "перевернуть" : "влево"}
+                              </p>
                             </button>
                           ))}
                         </div>
@@ -1007,8 +1388,8 @@ export default function PDFTools() {
                     
                     <button
                       onClick={handleEdit}
-                      disabled={isLoading || editTools.length === 0}
-                      className="w-full mt-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-400 disabled:opacity-60 text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2"
+                      disabled={isLoading || (!hasPageRotations && !hasWatermark && !hasGlobalRotate)}
+                      className="w-full mt-4 py-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-amber-400 disabled:opacity-60 text-stone-900 dark:text-white text-sm font-medium rounded-lg flex items-center justify-center gap-2"
                     >
                       {isLoading ? (
                         <>
@@ -1019,7 +1400,7 @@ export default function PDFTools() {
                           Редактирование...
                         </>
                       ) : (
-                        'Редактировать PDF'
+                        "Редактировать PDF"
                       )}
                     </button>
                   </div>
@@ -1053,7 +1434,7 @@ export default function PDFTools() {
                   <button
                     onClick={downloadAllAsZip}
                     disabled={isLoading}
-                    className="inline-flex items-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-white text-sm font-medium rounded-lg transition-colors"
+                    className="inline-flex items-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors"
                   >
                     <Download className="h-4 w-4 mr-1.5" />
                     Скачать все (ZIP)
@@ -1097,6 +1478,35 @@ export default function PDFTools() {
               </div>
             )}
 
+            {/* Извлечённый текст */}
+            {extractedText && extractedText.length > 0 && (
+              <div className="mt-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-medium text-zinc-900 dark:text-white">
+                    Извлечённый текст
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const full = extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n");
+                      void navigator.clipboard.writeText(full);
+                      showStatus("success", "Текст скопирован в буфер обмена", 3000);
+                    }}
+                    className="inline-flex items-center px-3 py-1.5 bg-amber-500 hover:bg-amber-600 text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors"
+                  >
+                    Копировать всё
+                  </button>
+                </div>
+                <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
+                  <textarea
+                    readOnly
+                    className="w-full h-64 p-4 text-sm text-zinc-800 dark:text-zinc-200 bg-white dark:bg-zinc-900 border-0 resize-none font-mono"
+                    value={extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n")}
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Результаты сжатия */}
             {compressResult && (
               <div className="mt-6">
@@ -1107,7 +1517,7 @@ export default function PDFTools() {
                   <div className="flex space-x-2">
                     <button
                       onClick={downloadCompressedFile}
-                      className="inline-flex items-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors"
+                      className="inline-flex items-center px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-stone-900 dark:text-white text-sm font-medium rounded-lg transition-colors"
                     >
                       <Download className="h-4 w-4 mr-1.5" />
                       Скачать
@@ -1151,40 +1561,104 @@ export default function PDFTools() {
         </div>
           </div>
         </section>
+        )}
 
-        {/* Features */}
-        <section id="features" className="py-16 md:py-24 px-4 sm:px-6">
+        {/* Features — только на главной */}
+        {!standalone && (
+        <section id="features" className="py-16 md:py-24 px-4 sm:px-6 bg-stone-50/50 dark:bg-stone-900/30">
           <div className="max-w-5xl mx-auto">
-            <h2 className="text-2xl md:text-3xl font-bold text-center text-stone-900 dark:text-white mb-12">
-              Всё необходимое в одном месте
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-              {[
-                { icon: Image, title: "Конвертация", desc: "PDF ↔ JPG, PNG, WebP" },
-                { icon: FileType, title: "Word / Excel", desc: "PDF в .docx и .xlsx" },
-                { icon: Merge, title: "Объединение", desc: "Несколько PDF в один" },
-                { icon: SplitSquareVertical, title: "Разделение", desc: "Извлечение страниц" },
-                { icon: PenLine, title: "Подпись", desc: "Онлайн-подпись в PDF" },
-                { icon: RotateCw, title: "Редактирование", desc: "Поворот, водяной знак" },
-                { icon: Shrink, title: "Сжатие", desc: "Уменьшение размера файла" },
-              ].map((f) => (
-                <div
-                  key={f.title}
-                  className="p-6 rounded-xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 hover:border-amber-300 dark:hover:border-amber-700 transition-colors"
-                >
-                  <div className="w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center mb-3">
-                    <f.icon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                  </div>
-                  <h3 className="font-semibold text-stone-900 dark:text-white">{f.title}</h3>
-                  <p className="text-sm text-stone-500 dark:text-stone-400 mt-1">{f.desc}</p>
+            <div className="text-center">
+              <h2 className="text-2xl md:text-3xl font-bold text-stone-900 dark:text-white">
+                Быстрый и понятный процесс
+              </h2>
+              <p className="mt-4 text-stone-600 dark:text-stone-400 max-w-2xl mx-auto">
+                Без лишних шагов: выберите нужный инструмент, загрузите файл и получите готовый результат.
+              </p>
+            </div>
+
+            <div className="mt-10 grid grid-cols-1 lg:grid-cols-3 gap-6">
+              <div className="lg:col-span-2 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-6 md:p-7">
+                <h3 className="text-lg font-semibold text-stone-900 dark:text-white mb-5">
+                  Почему это удобно
+                </h3>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {[
+                    {
+                      icon: Shield,
+                      title: "Конфиденциально",
+                      desc: "Документы обрабатываются в браузере, без отправки на сервер.",
+                    },
+                    {
+                      icon: Zap,
+                      title: "Быстро",
+                      desc: "Минимум настроек и понятные действия без лишних экранов.",
+                    },
+                    {
+                      icon: FileText,
+                      title: "Все базовые задачи",
+                      desc: "Конвертация, сжатие, объединение, подпись и редактирование PDF.",
+                    },
+                    {
+                      icon: CheckCircle2,
+                      title: "Предсказуемый результат",
+                      desc: "Единый интерфейс и одинаковый сценарий работы для всех инструментов.",
+                    },
+                  ].map((item) => (
+                    <div
+                      key={item.title}
+                      className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/60 dark:bg-stone-800/40 p-4"
+                    >
+                      <div className="w-10 h-10 rounded-lg bg-amber-50 dark:bg-amber-950/50 flex items-center justify-center mb-3">
+                        <item.icon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                      </div>
+                      <p className="font-medium text-stone-900 dark:text-stone-100">{item.title}</p>
+                      <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">{item.desc}</p>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+
+              <aside className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-6 md:p-7">
+                <h3 className="text-lg font-semibold text-stone-900 dark:text-white mb-5">
+                  Как начать
+                </h3>
+                <ol className="space-y-3">
+                  {[
+                    "Откройте нужный инструмент из списка выше",
+                    "Загрузите файл и при необходимости задайте параметры",
+                    "Скачайте обработанный документ",
+                  ].map((step, index) => (
+                    <li key={step} className="flex items-start gap-3">
+                      <span className="inline-flex h-6 w-6 mt-0.5 items-center justify-center rounded-full bg-amber-500 text-xs font-semibold text-stone-900 dark:text-white">
+                        {index + 1}
+                      </span>
+                      <span className="text-sm text-stone-700 dark:text-stone-300">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              </aside>
             </div>
           </div>
         </section>
+        )}
       </main>
-      <Footer />
+      {!standalone && <Footer />}
     </div>
   );
 }
 
+export default function PDFTools() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex flex-col">
+        <Header />
+        <main className="flex-1 flex items-center justify-center">
+          <span className="text-stone-500">Загрузка...</span>
+        </main>
+        <Footer />
+      </div>
+    }>
+      <PDFToolsContent />
+    </Suspense>
+  );
+}

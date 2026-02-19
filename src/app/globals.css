@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   --background: #fafaf9;
@@ -27,6 +28,10 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -34,4 +39,14 @@ body {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+::selection {
+  background: rgba(245, 158, 11, 0.25);
+  color: inherit;
+}
+
+/* Уменьшаем смещение при scroll-margin для якорей под sticky-шапкой */
+[id]:target {
+  scroll-margin-top: 5rem;
 }

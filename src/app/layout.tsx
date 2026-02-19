@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import { DEFAULT_DESCRIPTION, DEFAULT_KEYWORDS, DEFAULT_TITLE, SITE_NAME, getSiteUrl } from "./lib/seo";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -13,8 +14,34 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PDF Конвертер — Конвертация, объединение, сжатие PDF",
-  description: "Конвертируйте PDF в изображения и обратно, объединяйте, разделяйте, сжимайте и редактируйте PDF файлы онлайн",
+  metadataBase: new URL(getSiteUrl()),
+  title: {
+    default: DEFAULT_TITLE,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: DEFAULT_DESCRIPTION,
+  keywords: DEFAULT_KEYWORDS,
+  applicationName: SITE_NAME,
+  alternates: {
+    canonical: "/",
+  },
+  robots: {
+    index: true,
+    follow: true,
+  },
+  openGraph: {
+    type: "website",
+    locale: "ru_RU",
+    siteName: SITE_NAME,
+    title: DEFAULT_TITLE,
+    description: DEFAULT_DESCRIPTION,
+    url: "/",
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: DEFAULT_TITLE,
+    description: DEFAULT_DESCRIPTION,
+  },
 };
 
 export default function RootLayout({
@@ -31,8 +58,10 @@ export default function RootLayout({
               (function() {
                 var stored = localStorage.getItem('theme');
                 var prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-                var theme = stored || (prefersDark ? 'dark' : 'light');
-                document.documentElement.classList.toggle('dark', theme === 'dark');
+                var mode = (stored === 'light' || stored === 'dark' || stored === 'system') ? stored : 'system';
+                var resolved = mode === 'system' ? (prefersDark ? 'dark' : 'light') : mode;
+                document.documentElement.classList.toggle('dark', resolved === 'dark');
+                document.documentElement.style.colorScheme = resolved;
               })();
             `,
           }}
