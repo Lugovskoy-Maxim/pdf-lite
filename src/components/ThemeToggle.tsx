@@ -38,52 +38,45 @@ export function ThemeToggle() {
     return () => media.removeEventListener("change", onSystemThemeChange);
   }, [theme, mounted]);
 
-  const setMode = (next: ThemeMode) => {
-    setTheme(next);
-    localStorage.setItem(THEME_STORAGE_KEY, next);
-    applyTheme(next);
+  const cycleTheme = () => {
+    const nextTheme: ThemeMode = theme === "light" ? "system" : theme === "system" ? "dark" : "light";
+    setTheme(nextTheme);
+    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
+    applyTheme(nextTheme);
+  };
+
+  const getIcon = () => {
+    switch (theme) {
+      case "light":
+        return <Sun className="h-4 w-4" />;
+      case "dark":
+        return <Moon className="h-4 w-4" />;
+      case "system":
+        return <Monitor className="h-4 w-4" />;
+    }
+  };
+
+  const getLabel = () => {
+    switch (theme) {
+      case "light":
+        return "Светлая тема";
+      case "dark":
+        return "Тёмная тема";
+      case "system":
+        return "Системная тема";
+    }
   };
 
   if (!mounted) return null;
 
   return (
-    <div className="inline-flex items-center gap-1 p-1 rounded-lg border border-[var(--border)] bg-[var(--background)]">
-      <button
-        onClick={() => setMode("light")}
-        className={`p-1.5 rounded transition-colors ${
-          theme === "light"
-            ? "bg-[var(--surface)] text-[var(--foreground)]"
-            : "text-[var(--muted)] hover:text-[var(--foreground)]"
-        }`}
-        aria-label="Светлая тема"
-        title="Светлая тема"
-      >
-        <Sun className="h-4 w-4" />
-      </button>
-      <button
-        onClick={() => setMode("system")}
-        className={`p-1.5 rounded transition-colors ${
-          theme === "system"
-            ? "bg-[var(--surface)] text-[var(--foreground)]"
-            : "text-[var(--muted)] hover:text-[var(--foreground)]"
-        }`}
-        aria-label="Системная тема"
-        title="Системная тема"
-      >
-        <Monitor className="h-4 w-4" />
-      </button>
-      <button
-        onClick={() => setMode("dark")}
-        className={`p-1.5 rounded transition-colors ${
-          theme === "dark"
-            ? "bg-[var(--surface)] text-[var(--foreground)]"
-            : "text-[var(--muted)] hover:text-[var(--foreground)]"
-        }`}
-        aria-label="Тёмная тема"
-        title="Тёмная тема"
-      >
-        <Moon className="h-4 w-4" />
-      </button>
-    </div>
+    <button
+      onClick={cycleTheme}
+      className="p-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] hover:bg-[var(--surface)] transition-colors"
+      aria-label={getLabel()}
+      title={getLabel()}
+    >
+      {getIcon()}
+    </button>
   );
 }
