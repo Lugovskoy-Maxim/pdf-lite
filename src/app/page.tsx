@@ -859,7 +859,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
           <div className="max-w-5xl mx-auto">
             <div className="text-center mb-12">
               <h2 className="text-2xl md:text-3xl font-bold text-[var(--foreground)]">
-                Почему PDF Lite
+                Почему forPDF
               </h2>
               <p className="mt-2 text-[var(--muted)]">
                 Всё, что нужно для работы с PDF

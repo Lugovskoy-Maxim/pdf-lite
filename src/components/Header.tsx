@@ -17,7 +17,7 @@ export function Header() {
               <FileText className="w-5 h-5 text-white" />
             </div>
             <span className="font-bold text-lg text-[var(--foreground)]">
-              PDF Lite
+              forPDF
             </span>
           </Link>
           

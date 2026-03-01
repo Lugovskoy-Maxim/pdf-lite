@@ -14,7 +14,7 @@ export function Footer() {
               <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-light)] flex items-center justify-center">
                 <FileText className="w-5 h-5 text-white" />
               </div>
-              <span className="font-bold text-lg text-[var(--foreground)]">PDF Lite</span>
+              <span className="font-bold text-lg text-[var(--foreground)]">forPDF</span>
             </Link>
             <p className="text-sm text-[var(--muted)] leading-relaxed max-w-xs">
               Бесплатные онлайн-инструменты для работы с PDF. Все файлы обрабатываются локально в вашем браузере.
@@ -85,7 +85,7 @@ export function Footer() {
         
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-sm text-[var(--muted)]">
-            © {year} PDF Lite. Все инструменты бесплатны.
+            © {year} forPDF. Все инструменты бесплатны.
           </p>
           <p className="text-sm text-[var(--muted)] flex items-center gap-1.5">
             Сделано с <Heart className="w-4 h-4 text-red-500 fill-current" /> для удобства

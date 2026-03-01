@@ -1,5 +1,5 @@
-export const SITE_NAME = "PDF Lite";
-export const DEFAULT_TITLE = "PDF Lite — конвертация, объединение и сжатие PDF онлайн";
+export const SITE_NAME = "forPDF";
+export const DEFAULT_TITLE = "forPDF — конвертация, объединение и сжатие PDF онлайн";
 export const DEFAULT_DESCRIPTION =
   "Онлайн-инструменты для PDF: конвертация, объединение, разделение, сжатие, подпись и редактирование. Быстро и бесплатно, без установки.";
 export const DEFAULT_KEYWORDS =
