@@ -19,7 +19,7 @@ jobs:
             echo "🚀 Deploying pdf-lite to server..."
 
             # Создаем папку проекта если не существует
-            PROJECT_DIR="/opt/pdf-lite"
+            PROJECT_DIR="/home/${{ secrets.VM_USERNAME }}/pdf-lite"
             mkdir -p "$PROJECT_DIR"
             cd "$PROJECT_DIR"
             echo "Current directory: $(pwd)"
