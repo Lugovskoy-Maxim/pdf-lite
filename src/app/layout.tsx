@@ -52,6 +52,7 @@ export default function RootLayout({
   return (
     <html lang="ru" suppressHydrationWarning>
       <head>
+        <meta name="yandex-verification" content="aa9a957209169bb1" />
         <script
           dangerouslySetInnerHTML={{
             __html: `
