@@ -1,40 +1,157 @@
-name: Build and Deploy
+name: Deploy Next.js to server
 
 on:
   push:
-    branches:
-      - main
-  workflow_dispatch:
+    branches: [main]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Copy files to server
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT }}
-          source: "."
-          target: /opt/pdf-lite
-          overwrite: true
-
-      - name: Deploy to server
+      - name: Deploy Next.js to server
         uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.SERVER_HOST }}
-          username: ${{ secrets.SERVER_USER }}
-          key: ${{ secrets.SERVER_SSH_KEY }}
-          port: ${{ secrets.SERVER_PORT }}
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USERNAME }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          port: ${{ secrets.VM_SSH_PORT || 22 }}
           script: |
-            cd /opt/pdf-lite
-            npm ci
+            echo "🚀 Deploying pdf-lite to server..."
+
+            # Создаем папку проекта если не существует
+            PROJECT_DIR="/opt/pdf-lite"
+            mkdir -p "$PROJECT_DIR"
+            cd "$PROJECT_DIR"
+            echo "Current directory: $(pwd)"
+
+            # Клонируем или обновляем репозиторий через HTTPS
+            if [ ! -d .git ]; then
+              echo "Cloning repository for the first time..."
+              git clone https://github.com/${{ github.repository }}.git .
+            else
+              echo "Updating existing repository..."
+              git fetch origin
+              git reset --hard origin/main
+            fi
+
+            # Проверяем что мы в правильной папке
+            echo "Project contents:"
+            ls -la
+            echo "Package.json exists: $(test -f package.json && echo 'YES' || echo 'NO')"
+
+            # Устанавливаем Node.js через nvm
+            echo "🔧 Setting up Node.js 20..."
+            if [ -s "$HOME/.nvm/nvm.sh" ]; then
+              source "$HOME/.nvm/nvm.sh"
+            else
+              echo "Installing nvm..."
+              curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash
+              source "$HOME/.nvm/nvm.sh"
+            fi
+
+            if ! nvm ls 20 &> /dev/null; then
+              echo "Installing Node.js 20..."
+              nvm install 20
+            fi
+            nvm use 20
+            nvm alias default 20
+
+            echo "Node.js version: $(node --version)"
+            echo "npm version: $(npm --version)"
+
+            # Устанавливаем зависимости
+            echo "📦 Installing dependencies..."
+            rm -rf node_modules .next
+            npm install
+
+            # Собираем проект
+            echo "🔨 Building Next.js application..."
             npm run build
-            pm2 restart ecosystem.config.js --env production || pm2 start ecosystem.config.js --env production
+
+            # Проверяем результат сборки
+            echo "🔍 Checking build results..."
+            if [ -d ".next" ]; then
+              echo "✅ .next directory exists"
+              
+              if [ -f ".next/BUILD_ID" ]; then
+                echo "✅ BUILD_ID exists - production build is ready"
+                echo "BUILD_ID: $(cat .next/BUILD_ID)"
+              else
+                echo "❌ BUILD_ID not found - build may be incomplete"
+                exit 1
+              fi
+            else
+              echo "❌ .next directory does not exist - build failed"
+              exit 1
+            fi
+
+            # Создаем папку для логов
+            mkdir -p logs
+
+            # Создаем ecosystem файл для PM2
+            cat > ecosystem.config.js << 'EOF'
+            module.exports = {
+              apps: [{
+                name: 'pdf-lite',
+                script: 'node_modules/next/dist/bin/next',
+                args: 'start',
+                instances: 1,
+                exec_mode: 'fork',
+                env: {
+                  NODE_ENV: 'production',
+                  PORT: 3033
+                },
+                error_file: './logs/err.log',
+                out_file: './logs/out.log',
+                log_file: './logs/combined.log',
+                time: true
+              }]
+            }
+            EOF
+
+            # Останавливаем старый процесс и запускаем новый
+            echo "🔄 Starting Next.js application with PM2..."
+            pm2 stop pdf-lite 2>/dev/null || true
+            pm2 delete pdf-lite 2>/dev/null || true
+
+            # Проверяем порт 3033
+            echo "🔍 Checking port 3033..."
+            netstat -tlnp | grep 3033 || echo "Port 3033 is free"
+
+            # Запускаем приложение
+            pm2 start ecosystem.config.js
+
+            # Даем время на запуск
+            sleep 10
+
+            # Проверяем статус
+            echo "PM2 process list:"
+            pm2 ls
+
+            # Проверяем что приложение запустилось
+            echo "🔍 Checking if application is running..."
+            if pm2 show pdf-lite | grep -q "online"; then
+              echo "✅ PM2 process is online"
+            else
+              echo "❌ PM2 process is not online"
+              pm2 logs pdf-lite --lines 20
+              exit 1
+            fi
+
+            # Проверяем что приложение отвечает
+            echo "🔍 Checking if application responds..."
+            if curl -f http://localhost:3033 > /dev/null 2>&1; then
+              echo "✅ Next.js application is running successfully on port 3033"
+            else
+              echo "⚠️ Application might be starting, checking logs..."
+              pm2 logs pdf-lite --lines 10
+              sleep 10
+              if curl -f http://localhost:3033 > /dev/null 2>&1; then
+                echo "✅ Application started successfully after delay"
+              else
+                echo "❌ Application failed to start after multiple attempts"
+                exit 1
+              fi
+            fi
+
+            echo "✅ Successfully deployed pdf-lite on server!"
