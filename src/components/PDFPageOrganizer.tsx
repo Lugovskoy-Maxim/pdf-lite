@@ -76,9 +76,41 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange }: Props) {
 
     (async () => {
       try {
+        // Сначала пробуем серверную генерацию превью (Python + PyMuPDF)
+        const formData = new FormData();
+        formData.append("file", pdfFile);
+        const apiRes = await fetch("/api/pdf-thumbnails", { method: "POST", body: formData });
+        if (apiRes.ok) {
+          const data = (await apiRes.json()) as {
+            pageCount: number;
+            thumbnails: string[];
+            widths: number[];
+            heights: number[];
+          };
+          const totalPages = data.pageCount;
+          if (totalPages <= 0) {
+            throw new Error("В PDF не найдено страниц");
+          }
+          if (cancelled) return;
+          setPreviewProgress({ loaded: totalPages, total: totalPages });
+          setPages(
+            createSkeletonPages(totalPages).map((p, i) => ({
+              ...p,
+              previewDataUrl: data.thumbnails[i] ?? null,
+              width: data.widths[i] ?? DEFAULT_BLANK_WIDTH,
+              height: data.heights[i] ?? DEFAULT_BLANK_HEIGHT,
+            }))
+          );
+          setLoading(false);
+          return;
+        }
+
+        // Fallback: рендер в браузере через pdfjs-dist
         const pdfjsLib = await import("pdfjs-dist");
+        const { setPdfWorkerSrc } = await import("@/app/utils/pdfUtils");
+        setPdfWorkerSrc(pdfjsLib);
         const arrayBuffer = await pdfFile.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
 
         const totalPages = pdf.numPages;
         if (totalPages <= 0) {
@@ -103,8 +135,8 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange }: Props) {
           await page.render({ canvasContext: ctx, viewport, canvas }).promise;
 
           const previewDataUrl = canvas.toDataURL("image/jpeg", 0.85);
-          const width = page.view[2] || DEFAULT_BLANK_WIDTH;
-          const height = page.view[3] || DEFAULT_BLANK_HEIGHT;
+          const width = viewport.width / THUMB_SCALE || DEFAULT_BLANK_WIDTH;
+          const height = viewport.height / THUMB_SCALE || DEFAULT_BLANK_HEIGHT;
 
           if (cancelled) return;
           setPages((prev) => {
@@ -118,7 +150,6 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange }: Props) {
             loaded: Math.min(prev.loaded + 1, totalPages),
           }));
 
-          // Отдаем управление UI-потоку, чтобы интерфейс не "залипал" на больших PDF.
           if (i % batchSize === 0) {
             await new Promise((resolve) => setTimeout(resolve, 0));
           }

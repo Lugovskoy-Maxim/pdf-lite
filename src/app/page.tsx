@@ -4,9 +4,10 @@ import { useState, useRef, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, rotatePDFPages, convertImagesToPDF, createZipFromImages, convertPDFToWord, convertPDFToExcel, addSignature, getPDFPageCount, extractTextFromPDF, organizePDFPages, convertImagesBetweenFormats, type OrganizePDFPageOperation, type SignaturePosition } from "./utils/pdfUtils";
-import { Upload, X, Download, Trash2, FileText, Shield, Zap, Image, RotateCw, CheckCircle2, XCircle, ChevronRight } from 'lucide-react';
+import { Upload, X, Download, Trash2, FileText, Image, RotateCw, CheckCircle2, XCircle, ArrowRight, Shield, Zap, Globe, Sparkles } from 'lucide-react';
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
+import { AdPlaceholder } from "../components/AdPlaceholder";
 import { SignaturePad, SIGNATURE_COLORS } from "../components/SignaturePad";
 import { SignaturePreview } from "../components/SignaturePreview";
 import { PDFEditPreview } from "../components/PDFEditPreview";
@@ -16,58 +17,10 @@ import { TOOLS, TOOL_CATEGORIES, getToolById } from "./tools-config";
 const TAB_IDS = ["pdfToImage", "imageToPdf", "imageConverter", "pdfToWord", "pdfToExcel", "organizePages", "merge", "split", "signature", "edit", "compress", "pdfToZip", "extractText"] as const;
 
 const IMAGE_FORMAT_OPTIONS = [
-  { value: "JPG", title: "JPG", hint: "Меньше размер", icon: "/icons/format-jpg.svg" },
-  { value: "PNG", title: "PNG", hint: "Без потерь", icon: "/icons/format-png.svg" },
-  { value: "WebP", title: "WebP", hint: "Современный", icon: "/icons/format-webp.svg" },
+  { value: "JPG", title: "JPG" },
+  { value: "PNG", title: "PNG" },
+  { value: "WebP", title: "WebP" },
 ] as const;
-
-const TOOL_BUTTON_LABELS: Record<string, string> = {
-  pdfToImage: "PDF в картинки",
-  imageToPdf: "Картинки в PDF",
-  imageConverter: "Конвертер изображений",
-  pdfToWord: "PDF в Word",
-  pdfToExcel: "PDF в Excel",
-  organizePages: "Организовать страницы",
-  merge: "Объединить",
-  split: "Разделить",
-  signature: "Подпись",
-  edit: "Редактировать",
-  compress: "Сжать",
-  pdfToZip: "PDF в ZIP",
-  extractText: "Извлечь текст",
-};
-
-const ICON_BADGE_STYLES: Record<string, string> = {
-  pdfToImage: "bg-sky-100 dark:bg-sky-900/40",
-  imageToPdf: "bg-rose-100 dark:bg-rose-900/40",
-  imageConverter: "bg-pink-100 dark:bg-pink-900/40",
-  pdfToWord: "bg-blue-100 dark:bg-blue-900/40",
-  pdfToExcel: "bg-emerald-100 dark:bg-emerald-900/40",
-  organizePages: "bg-indigo-100 dark:bg-indigo-900/40",
-  merge: "bg-orange-100 dark:bg-orange-900/40",
-  split: "bg-violet-100 dark:bg-violet-900/40",
-  signature: "bg-fuchsia-100 dark:bg-fuchsia-900/40",
-  edit: "bg-cyan-100 dark:bg-cyan-900/40",
-  compress: "bg-lime-100 dark:bg-lime-900/40",
-  pdfToZip: "bg-amber-100 dark:bg-amber-900/40",
-  extractText: "bg-teal-100 dark:bg-teal-900/40",
-};
-
-function getIconBadgeStyle(toolId: string) {
-  return ICON_BADGE_STYLES[toolId] ?? "bg-amber-100 dark:bg-amber-900/40";
-}
-
-function getToolButtonLabel(toolId: string, fallbackTitle: string) {
-  return TOOL_BUTTON_LABELS[toolId] ?? fallbackTitle;
-}
-
-function getPrimaryButtonClass(enabled: boolean, withTopMargin = false) {
-  return `btn-ui btn-primary w-full ${withTopMargin ? "mt-4" : ""} ${
-    enabled
-      ? ""
-      : "bg-stone-200 dark:bg-stone-700 border-stone-300 dark:border-stone-600 text-stone-500 dark:text-stone-400"
-  }`;
-}
 
 type PDFToolsContentProps = {
   forcedTool?: string;
@@ -88,7 +41,6 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   const [activeTab, setActiveTab] = useState<string>(initialTabFromUrl ?? "pdfToImage");
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
 
-  // Редирект ?tool=xxx на отдельную страницу инструмента (только когда не standalone и не в iframe)
   useEffect(() => {
     if (standalone || !initialTabFromUrl) return;
     const tool = getToolById(initialTabFromUrl);
@@ -162,11 +114,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
 
   const parsePageSelection = (value: string, maxPage?: number) => {
     const pages = new Set<number>();
-    const tokens = value
-      .split(/[,\s]+/)
-      .map((t) => t.trim())
-      .filter(Boolean);
-
+    const tokens = value.split(/[,\s]+/).map((t) => t.trim()).filter(Boolean);
     for (const token of tokens) {
       if (token.includes("-")) {
         const [rawStart, rawEnd] = token.split("-");
@@ -182,13 +130,11 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
         }
         continue;
       }
-
       const page = Number(token);
       if (!Number.isFinite(page) || page <= 0) continue;
       if (maxPage && page > maxPage) continue;
       pages.add(page);
     }
-
     return [...pages].sort((a, b) => a - b);
   };
 
@@ -344,26 +290,15 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       showStatus('error', 'Для этого инструмента нужны только изображения (JPG, PNG, WebP)');
       return;
     }
-    
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Конвертация изображений в PDF...' });
-    
     try {
       const pdfBlob = await convertImagesToPDF(imageFiles);
-      
-      // Создание ссылки для скачивания и сохранение результата в состоянии
       const url = URL.createObjectURL(pdfBlob);
       const resultName = imageFiles.length > 1
         ? `converted-${imageFiles.length}-images.pdf`
         : fileName.replace(/\.[^/.]+$/, ".pdf");
-      
-      // Сохраняем результат в состоянии conversionResults для отображения
-      replaceConversionResults([{
-        blob: pdfBlob,
-        url,
-        name: resultName
-      }]);
-      
+      replaceConversionResults([{ blob: pdfBlob, url, name: resultName }]);
       showStatus('success', `Конвертация завершена!`, 10000);
     } catch (error) {
       showStatus('error', 'Ошибка при конвертации изображений: ' + (error as Error).message);
@@ -385,17 +320,14 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       showStatus("error", "Выберите формат вывода");
       return;
     }
-
     setIsLoading(true);
     setStatusMessage({ type: "success", text: "Конвертация изображений..." });
-
     try {
       const results = await convertImagesBetweenFormats(imageFiles, convertFormat);
       if (results.length === 0) {
         showStatus("error", "Не удалось конвертировать выбранные файлы");
         return;
       }
-
       replaceConversionResults(
         results.map((item) => ({
           blob: item.blob,
@@ -416,25 +348,19 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       showStatus('error', 'Пожалуйста, выберите PDF файл для конвертации');
       return;
     }
-    
     if (!convertFormat) {
       showStatus('error', 'Пожалуйста, выберите формат для конвертации');
       return;
     }
-    
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Конвертация...' });
-    
     try {
       const images = await convertPDFToImages(selectedPdfFile, convertFormat);
-      
-      // Сохраняем результаты конвертации в состоянии
       const results = images.map((blob, index) => ({
         blob,
         url: URL.createObjectURL(blob),
         name: `page-${index + 1}.${convertFormat.toLowerCase()}`
       }));
-      
       replaceConversionResults(results);
       showStatus('success', `Конвертация завершена! ${images.length} страниц(а) обработано`, 5000);
     } catch (error) {
@@ -449,26 +375,15 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       showStatus('error', 'Пожалуйста, выберите PDF файл для сжатия');
       return;
     }
-    
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Сжатие файла...' });
     clearCompressResult();
-    
     try {
       const compressedFile = await compressPDF(selectedPdfFile, compressionLevel);
-      
-      // Сохраняем результат для отображения
       const url = URL.createObjectURL(compressedFile);
       const originalSize = selectedPdfFile.size;
       const compressedSize = compressedFile.size;
-      
-      replaceCompressResult({
-        blob: compressedFile,
-        url,
-        originalSize,
-        compressedSize,
-      });
-      
+      replaceCompressResult({ blob: compressedFile, url, originalSize, compressedSize });
       showStatus('success', `Сжатие завершено!`, 10000);
     } catch (error) {
       showStatus('error', 'Ошибка при сжатии файла: ' + (error as Error).message);
@@ -683,19 +598,15 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       showStatus("error", "Пожалуйста, выберите PDF файл для редактирования");
       return;
     }
-
     if (!hasPageRotations && !hasWatermark && !hasGlobalRotate) {
       showStatus("error", "Поверните страницы в превью и/или выберите водяной знак или поворот всех");
       return;
     }
-
     setIsLoading(true);
     setStatusMessage({ type: "success", text: "Редактирование файла..." });
-
     try {
       let resultFile: Blob = selectedPdfFile;
       let resultName = fileName;
-
       if (hasPageRotations) {
         resultFile = await rotatePDFPages(new File([resultFile], resultName), editPageRotations);
         resultName = `rotated-${resultName}`;
@@ -708,7 +619,6 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
         resultFile = await addWatermark(new File([resultFile], resultName), watermarkText);
         resultName = `watermarked-${resultName}`;
       }
-
       const url = URL.createObjectURL(resultFile);
       replaceConversionResults([{ blob: resultFile, url, name: resultName }]);
       showStatus("success", `Редактирование ${fileName} завершено!`, 5000);
@@ -724,31 +634,18 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       showStatus("error", "Выберите PDF файл");
       return;
     }
-
     const activePages = organizerPages.filter((p) => !p.deleted);
     if (activePages.length === 0) {
       showStatus("error", "После удаления не осталось страниц для сохранения");
       return;
     }
-
     const operations: OrganizePDFPageOperation[] = activePages.map((page) =>
       page.kind === "blank"
-        ? {
-            kind: "blank",
-            width: page.width,
-            height: page.height,
-          }
-        : {
-            kind: "source",
-            sourceIndex: page.sourceIndex ?? 0,
-            rotation: page.rotation,
-            cropPercent: page.cropPercent,
-          }
+        ? { kind: "blank", width: page.width, height: page.height }
+        : { kind: "source", sourceIndex: page.sourceIndex ?? 0, rotation: page.rotation, cropPercent: page.cropPercent }
     );
-
     setIsLoading(true);
     setStatusMessage({ type: "success", text: "Организация страниц..." });
-
     try {
       const blob = await organizePDFPages(selectedPdfFile, operations);
       const url = URL.createObjectURL(blob);
@@ -785,7 +682,6 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
 
   const downloadCompressedFile = () => {
     if (!compressResult) return;
-    
     const a = document.createElement('a');
     a.href = compressResult.url;
     a.download = `compressed-${fileName}`;
@@ -800,14 +696,10 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
 
   const downloadAllAsZip = async () => {
     if (conversionResults.length === 0) return;
-    
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Создание архива...' });
-    
     try {
       const zipBlob = await createZipFromImages(conversionResults);
-      
-      // Скачивание архива
       const url = URL.createObjectURL(zipBlob);
       const a = document.createElement('a');
       a.href = url;
@@ -816,7 +708,6 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      
       showStatus('success', `Архив с ${conversionResults.length} изображением(ями) скачан!`, 5000);
     } catch (error) {
       showStatus('error', 'Ошибка при создании архива: ' + (error as Error).message);
@@ -832,164 +723,250 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
         {!standalone && (
         <>
         {/* Hero */}
-        <section className="relative py-14 md:py-20 overflow-hidden">
-          <div className="absolute inset-0 bg-gradient-to-b from-amber-50/70 dark:from-amber-950/25 via-transparent to-transparent" aria-hidden />
-          <div className="relative max-w-4xl mx-auto px-4 sm:px-6 text-center">
-            <h1 className="text-3xl sm:text-4xl md:text-5xl font-bold text-stone-900 dark:text-white tracking-tight leading-tight text-balance">
-              Онлайн-инструменты для PDF
+        <section className="py-16 md:py-24 relative overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-b from-[var(--surface)] via-transparent to-transparent" />
+          <div className="absolute top-20 left-1/4 w-72 h-72 bg-[var(--accent)] opacity-5 rounded-full blur-3xl" />
+          <div className="absolute top-40 right-1/4 w-96 h-96 bg-[var(--accent-light)] opacity-5 rounded-full blur-3xl" />
+          
+          <div className="relative max-w-3xl mx-auto px-4 sm:px-6 text-center">
+            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-[var(--surface)] border border-[var(--border)] text-sm text-[var(--muted)] mb-6 animate-fade-in">
+              <Sparkles className="w-4 h-4 text-[var(--accent)]" />
+              Все файлы обрабатываются локально
+            </div>
+            
+            <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold text-[var(--foreground)] tracking-tight leading-tight animate-fade-in-up">
+              Инструменты для{' '}
+              <span className="bg-gradient-to-r from-[var(--accent)] to-[var(--accent-light)] bg-clip-text text-transparent">
+                PDF
+              </span>
             </h1>
-            <p className="mt-5 text-base md:text-lg text-stone-600 dark:text-stone-400 max-w-2xl mx-auto leading-relaxed text-balance">
-              Объединяйте, сжимайте, конвертируйте и редактируйте PDF без установки. Всё в браузере и бесплатно.
+            
+            <p className="mt-6 text-lg md:text-xl text-[var(--muted)] max-w-2xl mx-auto leading-relaxed animate-fade-in-up">
+              Конвертируйте, объединяйте и редактируйте PDF прямо в браузере. 
+              <span className="text-[var(--foreground)] font-medium"> Бесплатно</span> и без регистрации.
             </p>
-            <div className="mt-8 flex flex-wrap justify-center gap-3">
-              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-white dark:bg-stone-800/80 text-stone-700 dark:text-stone-300 text-sm font-medium border border-stone-200 dark:border-stone-700 shadow-sm">
-                <Shield className="h-4 w-4 text-emerald-500" />
-                Файлы не покидают браузер
-              </span>
-              <span className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-amber-500 text-stone-900 text-sm font-medium shadow-sm">
-                <Zap className="h-4 w-4" />
-                Бесплатно
-              </span>
+            
+            <div className="mt-8 flex flex-wrap justify-center gap-3 animate-fade-in-up">
+              <a href="#tools" className="btn btn-primary btn-lg">
+                Начать работу
+                <ArrowRight className="w-4 h-4" />
+              </a>
+            </div>
+            
+            <div className="mt-12 flex flex-wrap justify-center gap-6 text-sm text-[var(--muted)]">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[var(--surface)] flex items-center justify-center">
+                  <Shield className="w-4 h-4 text-[var(--success)]" />
+                </div>
+                <span>Безопасно</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[var(--surface)] flex items-center justify-center">
+                  <Zap className="w-4 h-4 text-[var(--accent)]" />
+                </div>
+                <span>Быстро</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-[var(--surface)] flex items-center justify-center">
+                  <Globe className="w-4 h-4 text-[var(--muted)]" />
+                </div>
+                <span>Работает офлайн</span>
+              </div>
             </div>
           </div>
         </section>
 
-        {/* Категории и сетка инструментов */}
-        <section id="tools" className="py-4 px-4 sm:px-6 scroll-mt-20">
-          <div className="max-w-6xl mx-auto">
+        {/* Ad Banner - Top */}
+        <section className="pb-8 px-4 sm:px-6">
+          <div className="max-w-5xl mx-auto">
+            <AdPlaceholder size="leaderboard" />
+          </div>
+        </section>
+
+        {/* Category Filter */}
+        <section id="tools" className="px-4 sm:px-6 scroll-mt-20">
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-10">
+              <h2 className="text-2xl md:text-3xl font-bold text-[var(--foreground)]">
+                Выберите инструмент
+              </h2>
+              <p className="mt-2 text-[var(--muted)]">
+                {TOOLS.length} инструментов для работы с PDF
+              </p>
+            </div>
+            
             <div className="flex flex-wrap gap-2 justify-center mb-8">
               {TOOL_CATEGORIES.map((cat) => (
                 <button
                   key={cat.id}
                   onClick={() => setCategoryFilter(cat.id)}
-                  className={`btn-ui rounded-full px-4 py-2.5 text-sm transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
+                  className={`btn btn-sm ${
                     categoryFilter === cat.id
-                      ? "bg-amber-500 text-stone-900 shadow-md shadow-amber-500/25"
-                      : "bg-white dark:bg-stone-800/80 text-stone-600 dark:text-stone-400 hover:bg-stone-50 dark:hover:bg-stone-800 border border-stone-200 dark:border-stone-700 hover:border-stone-300 dark:hover:border-stone-600"
+                      ? "btn-primary"
+                      : "btn-secondary"
                   }`}
                 >
                   {cat.label}
                 </button>
               ))}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5">
-              {filteredTools.map((tool) => {
+            
+            {/* Tools Grid */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredTools.map((tool, index) => {
                 const title = tool.title.split(" — ")[0];
                 return (
                   <Link
                     key={tool.id}
                     href={`/${tool.path}`}
-                    className="group relative text-left p-6 rounded-2xl bg-white dark:bg-stone-900 border border-stone-200 dark:border-stone-800 hover:border-amber-300 dark:hover:border-amber-700 hover:shadow-xl hover:shadow-stone-200/50 dark:hover:shadow-none hover:-translate-y-0.5 transition-all duration-200 block focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 focus:border-transparent"
+                    className="tool-card group block"
+                    style={{ animationDelay: `${index * 50}ms` }}
                   >
-                    <div
-                      className={`w-14 h-14 rounded-2xl flex items-center justify-center mb-4 overflow-hidden ring-1 ring-inset ring-white/70 dark:ring-stone-700 ${getIconBadgeStyle(tool.id)}`}
-                    >
-                      <img
-                        src={`/icons/${tool.id}.svg`}
-                        alt=""
-                        className="w-8 h-8 object-contain"
-                        width={56}
-                        height={56}
-                      />
+                    <div className="flex items-start gap-4">
+                      <div className="icon-box icon-box-accent w-12 h-12 flex-shrink-0">
+                        <img
+                          src={`/icons/${tool.id}.svg`}
+                          alt=""
+                          className="w-6 h-6 object-contain"
+                          width={24}
+                          height={24}
+                        />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <h3 className="font-semibold text-[var(--foreground)] group-hover:text-[var(--accent)] transition-colors">{title}</h3>
+                        <p className="mt-1 text-sm text-[var(--muted)] line-clamp-2 leading-relaxed">
+                          {tool.shortDescription}
+                        </p>
+                      </div>
+                      <ArrowRight className="w-5 h-5 text-[var(--accent)] opacity-0 group-hover:opacity-100 group-hover:translate-x-1 transition-all flex-shrink-0 mt-0.5" />
                     </div>
-                    <h3 className="font-semibold text-stone-900 dark:text-white text-lg">{title}</h3>
-                    <p className="mt-2 text-sm text-stone-500 dark:text-stone-400 line-clamp-2 leading-snug">
-                      {tool.shortDescription}
-                    </p>
-                    <span className="inline-flex items-center gap-1.5 mt-4 text-sm font-medium text-amber-600 dark:text-amber-400 opacity-80 group-hover:opacity-100 transition-opacity">
-                      Открыть
-                      <ChevronRight className="h-4 w-4 group-hover:translate-x-0.5 transition-transform" />
-                    </span>
                   </Link>
                 );
               })}
             </div>
           </div>
         </section>
-        </>
-        )}
 
-        {/* Блок работы с инструментом — только standalone для страницы инструмента */}
-        {standalone && (
-        <section className="py-8 md:py-12 px-4 sm:px-6 pt-6">
+        {/* Ad Banner - Middle */}
+        <section className="py-12 px-4 sm:px-6">
           <div className="max-w-5xl mx-auto">
-            <div className="mb-8">
-              <h2 id="tools-heading" className="text-2xl font-bold text-stone-900 dark:text-white">
-                Работа с файлами
-              </h2>
-              <p className="mt-2 text-stone-600 dark:text-stone-400">
-                Загрузите файл, настройте параметры и получите результат за пару кликов.
-              </p>
-              {activeToolMeta && (
-                <div className="mt-4 flex items-center gap-3 rounded-xl border border-stone-200 bg-white p-3 dark:border-stone-700 dark:bg-stone-900">
-                  <div className={`flex h-11 w-11 items-center justify-center rounded-lg ${getIconBadgeStyle(activeToolMeta.id)}`}>
-                    <img src={`/icons/${activeToolMeta.id}.svg`} alt="" className="h-6 w-6 object-contain" />
-                  </div>
-                  <div>
-                    <p className="text-sm font-semibold text-stone-900 dark:text-stone-100">
-                      {activeToolMeta.title.split(" — ")[0]}
-                    </p>
-                    <p className="text-xs text-stone-500 dark:text-stone-400">{activeToolMeta.shortDescription}</p>
-                  </div>
-                </div>
-              )}
-            </div>
+            <AdPlaceholder size="banner" />
+          </div>
+        </section>
 
-        <div className="bg-white dark:bg-stone-900 rounded-2xl shadow-lg shadow-stone-200/40 dark:shadow-none border border-stone-200 dark:border-stone-800 overflow-hidden">
-          <div className="border-b border-stone-200 dark:border-stone-800 bg-stone-50/80 dark:bg-stone-900/80 px-4 sm:px-6 py-4">
-            <p className="text-xs font-semibold text-stone-500 dark:text-stone-400 mb-3 uppercase tracking-wider">Инструменты</p>
-            <div className="flex flex-wrap gap-2">
-              {TOOLS.map((tool) => (
-                <Link
-                  key={tool.id}
-                  href={`/${tool.path}`}
-                  className={`btn-ui inline-flex items-center gap-2.5 px-3 py-2 text-xs sm:text-sm transition-all border focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900 ${
-                    activeTab === tool.id
-                      ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-stone-900 dark:text-stone-100 shadow-sm"
-                      : "btn-secondary border-stone-200 dark:border-stone-700 text-stone-600 dark:text-stone-300"
-                  }`}
-                >
-                  <span className={`inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md ${getIconBadgeStyle(tool.id)}`}>
-                    <img src={`/icons/${tool.id}.svg`} alt="" className="h-4 w-4 object-contain" />
-                  </span>
-                  <span>{getToolButtonLabel(tool.id, tool.title.split(" — ")[0])}</span>
-                </Link>
+        {/* Features */}
+        <section className="py-16 md:py-24 px-4 sm:px-6 bg-[var(--surface)]">
+          <div className="max-w-5xl mx-auto">
+            <div className="text-center mb-12">
+              <h2 className="text-2xl md:text-3xl font-bold text-[var(--foreground)]">
+                Почему PDF Lite
+              </h2>
+              <p className="mt-2 text-[var(--muted)]">
+                Всё, что нужно для работы с PDF
+              </p>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {[
+                { 
+                  icon: Shield, 
+                  title: "Локальная обработка", 
+                  desc: "Файлы обрабатываются в вашем браузере и никогда не загружаются на сервер. Полная конфиденциальность.",
+                  color: "var(--success)"
+                },
+                { 
+                  icon: Zap, 
+                  title: "Бесплатно навсегда", 
+                  desc: "Все инструменты доступны без ограничений, подписок и скрытых платежей.",
+                  color: "var(--accent)"
+                },
+                { 
+                  icon: Globe, 
+                  title: "Работает везде", 
+                  desc: "Не нужно ничего устанавливать. Работает в любом современном браузере, даже офлайн.",
+                  color: "var(--muted)"
+                },
+              ].map((item) => (
+                <div key={item.title} className="feature-card text-center">
+                  <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-[var(--background)] shadow-sm mb-4">
+                    <item.icon className="w-6 h-6" style={{ color: item.color }} />
+                  </div>
+                  <h3 className="font-semibold text-lg text-[var(--foreground)]">{item.title}</h3>
+                  <p className="mt-2 text-sm text-[var(--muted)] leading-relaxed">{item.desc}</p>
+                </div>
+              ))}
+            </div>
+            
+            {/* Stats */}
+            <div className="mt-16 grid grid-cols-2 md:grid-cols-4 gap-6 text-center">
+              {[
+                { value: "13+", label: "Инструментов" },
+                { value: "100%", label: "Бесплатно" },
+                { value: "0", label: "Загрузок на сервер" },
+                { value: "∞", label: "Файлов в день" },
+              ].map((stat) => (
+                <div key={stat.label}>
+                  <div className="text-3xl md:text-4xl font-bold text-[var(--foreground)]">{stat.value}</div>
+                  <div className="mt-1 text-sm text-[var(--muted)]">{stat.label}</div>
+                </div>
               ))}
             </div>
           </div>
-
-          {/* Основной контент */}
-          <div className="p-6">
-            <div className="mb-6 grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
+        </section>
+        
+        {/* How it works */}
+        <section className="py-16 px-4 sm:px-6">
+          <div className="max-w-4xl mx-auto">
+            <div className="text-center mb-12">
+              <h2 className="text-2xl md:text-3xl font-bold text-[var(--foreground)]">
+                Как это работает
+              </h2>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
               {[
-                { step: "1", label: "Загрузите файл", icon: Upload, iconClass: "text-sky-600 dark:text-sky-400", glowClass: "from-sky-100/90 dark:from-sky-900/50" },
-                { step: "2", label: "Настройте параметры", icon: Zap, iconClass: "text-violet-600 dark:text-violet-400", glowClass: "from-violet-100/90 dark:from-violet-900/50" },
-                { step: "3", label: "Скачайте результат", icon: Download, iconClass: "text-emerald-600 dark:text-emerald-400", glowClass: "from-emerald-100/90 dark:from-emerald-900/50" },
-              ].map((item) => (
-                <div
-                  key={item.step}
-                  className="group relative overflow-hidden rounded-xl border border-stone-200/90 bg-stone-50/80 px-4 py-3.5 shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md dark:border-stone-700/80 dark:bg-stone-800/50"
-                >
-                  <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${item.glowClass} via-transparent to-transparent opacity-80`} />
-                  <div className="relative flex items-center gap-3">
-                    <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-amber-300/70 bg-amber-100 text-xs font-bold text-amber-700 dark:border-amber-700/60 dark:bg-amber-900/60 dark:text-amber-300">
+                { step: "1", title: "Выберите инструмент", desc: "Найдите нужный инструмент в списке выше" },
+                { step: "2", title: "Загрузите файл", desc: "Перетащите файл или выберите с устройства" },
+                { step: "3", title: "Скачайте результат", desc: "Получите обработанный файл за секунды" },
+              ].map((item, index) => (
+                <div key={item.step} className="relative">
+                  {index < 2 && (
+                    <div className="hidden md:block absolute top-8 left-full w-full h-px bg-gradient-to-r from-[var(--border)] to-transparent -translate-x-1/2" />
+                  )}
+                  <div className="flex flex-col items-center text-center">
+                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-light)] flex items-center justify-center text-2xl font-bold text-white shadow-lg mb-4">
                       {item.step}
-                    </span>
-                    <span className={`inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/90 dark:bg-stone-900/80 ${item.iconClass}`}>
-                      <item.icon className="h-4 w-4" />
-                    </span>
-                    <span className="font-semibold text-stone-700 dark:text-stone-100">{item.label}</span>
+                    </div>
+                    <h3 className="font-semibold text-[var(--foreground)]">{item.title}</h3>
+                    <p className="mt-2 text-sm text-[var(--muted)]">{item.desc}</p>
                   </div>
                 </div>
               ))}
             </div>
-            <div className="flex flex-col lg:flex-row gap-6 mb-6">
-              {/* Область загрузки + подпись (при выборе вкладки Подпись) */}
-              <div className="flex-1 flex flex-col gap-4">
+          </div>
+        </section>
+        </>
+        )}
+
+        {/* Tool Workspace - Standalone Mode */}
+        {standalone && (
+        <section className="py-8 px-4 sm:px-6">
+          <div className="max-w-4xl mx-auto">
+            {activeToolMeta && (
+              <div className="mb-6">
+                <h2 className="text-xl font-medium text-[var(--foreground)]">
+                  {activeToolMeta.title.split(" — ")[0]}
+                </h2>
+                <p className="mt-1 text-sm text-[var(--muted)]">
+                  {activeToolMeta.shortDescription}
+                </p>
+              </div>
+            )}
+
+            <div className="card p-6">
+              {/* Upload Zone */}
               <div
-                className={`border-2 border-dashed border-stone-300 dark:border-stone-600 rounded-xl text-center transition-colors hover:border-amber-400 dark:hover:border-amber-600 ${
-                  activeTab === "signature" ? "min-h-[120px] p-6" : "min-h-[200px] p-8"
-                }`}
+                className="upload-zone p-8 text-center mb-6"
                 onDrop={handleDrop}
                 onDragOver={handleDragOver}
               >
@@ -1001,110 +978,80 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                   accept={inputAccept}
                   multiple={allowMultipleSelection}
                 />
-                <div className="space-y-4">
-                  <div className="mx-auto w-14 h-14 bg-amber-100 dark:bg-amber-900/50 rounded-xl flex items-center justify-center">
-                    <Upload className="h-7 w-7 text-amber-600 dark:text-amber-400" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-stone-900 dark:text-white">
-                      Перетащите сюда или нажмите для выбора
-                    </p>
-                    <p className="text-sm text-stone-500 dark:text-stone-400 mt-1">
-                      {activeTab === "merge"
-                        ? "PDF файлы (2 и более)"
-                        : activeTab === "imageToPdf" || activeTab === "imageConverter"
-                        ? "JPG, PNG, WebP"
-                        : activeTab === "signature" || activeTab === "pdfToWord" || activeTab === "pdfToExcel" || activeTab === "pdfToZip" || activeTab === "extractText" || activeTab === "organizePages"
-                        ? "PDF файл"
-                        : "PDF или изображения"}
-                    </p>
-                  </div>
-                  <button
-                    onClick={triggerFileInput}
-                    className="btn-ui btn-primary px-5 py-2.5 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-900"
-                  >
-                    <Upload className="h-4 w-4" />
-                    Выбрать файлы
-                  </button>
-                  {fileList.length > 0 && (
-                    <div className="mt-4 w-full">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm font-medium text-stone-600 dark:text-stone-400">
-                          Загружено файлов: {fileList.length}
-                        </span>
-                        <button
-                          onClick={handleClearFile}
-                          className="btn-ui btn-ghost px-2.5 py-1.5 text-sm text-stone-500 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50"
-                          title="Удалить все"
-                        >
-                          <X className="h-4 w-4" />
-                          Очистить
-                        </button>
-                      </div>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 max-h-[220px] overflow-y-auto pr-1">
-                        {fileList.map((f, index) => {
-                          const isPdf = f.type.startsWith("application/pdf");
-                          const previewUrl = previewUrls[index] ?? null;
-                          return (
-                            <div
-                              key={`${f.name}-${index}`}
-                              className="relative group rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-800/80 overflow-hidden shadow-sm hover:shadow-md transition-shadow"
-                            >
-                              <div className="aspect-square flex items-center justify-center bg-stone-100 dark:bg-stone-800 min-h-[80px]">
-                                {previewUrl ? (
-                                  <img
-                                    src={previewUrl}
-                                    alt=""
-                                    className="w-full h-full object-cover"
-                                  />
-                                ) : isPdf ? (
-                                  <div className="p-3 rounded-lg bg-red-100 dark:bg-red-900/30">
-                                    <FileText className="h-8 w-8 text-red-600 dark:text-red-400" />
-                                  </div>
-                                ) : (
-                                  <div className="p-3 rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                                    <Image className="h-8 w-8 text-amber-600 dark:text-amber-400" />
-                                  </div>
-                                )}
-                              </div>
-                              <div className="p-2 border-t border-stone-100 dark:border-stone-700">
-                                <p className="text-xs font-medium text-stone-800 dark:text-stone-200 truncate" title={f.name}>
-                                  {f.name}
-                                </p>
-                                <p className="text-[10px] text-stone-500 dark:text-stone-400">
-                                  {formatFileSize(f.size)}
-                                </p>
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <Upload className="w-8 h-8 text-[var(--muted)] mx-auto mb-3" />
+                <p className="text-[var(--foreground)] font-medium mb-1">
+                  Перетащите файлы сюда
+                </p>
+                <p className="text-sm text-[var(--muted)] mb-4">
+                  или нажмите для выбора
+                </p>
+                <button onClick={triggerFileInput} className="btn btn-primary">
+                  Выбрать файлы
+                </button>
               </div>
 
+              {/* File List */}
+              {fileList.length > 0 && (
+                <div className="mb-6">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm text-[var(--muted)]">
+                      Файлов: {fileList.length}
+                    </span>
+                    <button onClick={handleClearFile} className="btn btn-ghost btn-sm">
+                      <X className="w-4 h-4" />
+                      Очистить
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                    {fileList.map((f, index) => {
+                      const isPdf = f.type.startsWith("application/pdf");
+                      const previewUrl = previewUrls[index] ?? null;
+                      return (
+                        <div key={`${f.name}-${index}`} className="card p-3">
+                          <div className="aspect-square bg-[var(--surface)] rounded flex items-center justify-center mb-2">
+                            {previewUrl ? (
+                              <img src={previewUrl} alt="" className="w-full h-full object-cover rounded" />
+                            ) : isPdf ? (
+                              <FileText className="w-8 h-8 text-[var(--muted)]" />
+                            ) : (
+                              <Image className="w-8 h-8 text-[var(--muted)]" />
+                            )}
+                          </div>
+                          <p className="text-xs text-[var(--foreground)] truncate">{f.name}</p>
+                          <p className="text-xs text-[var(--muted)]">{formatFileSize(f.size)}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Tool-specific controls */}
               {activeTab === "edit" && file && file.type.startsWith("application/pdf") && pdfPageCount > 0 && (
-                <PDFEditPreview
-                  pdfFile={file}
-                  pageRotations={editPageRotations}
-                  onPageRotationsChange={setEditPageRotations}
-                  pageCount={pdfPageCount}
-                />
+                <div className="mb-6">
+                  <PDFEditPreview
+                    pdfFile={file}
+                    pageRotations={editPageRotations}
+                    onPageRotationsChange={setEditPageRotations}
+                    pageCount={pdfPageCount}
+                  />
+                </div>
               )}
 
               {activeTab === "organizePages" && selectedPdfFile && (
-                <PDFPageOrganizer
-                  pdfFile={selectedPdfFile}
-                  pageCount={pdfPageCount}
-                  onChange={setOrganizerPages}
-                />
+                <div className="mb-6">
+                  <PDFPageOrganizer
+                    pdfFile={selectedPdfFile}
+                    pageCount={pdfPageCount}
+                    onChange={setOrganizerPages}
+                  />
+                </div>
               )}
 
               {activeTab === "signature" && (
-                <div className="space-y-4">
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900/50 p-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Область для подписи (прозрачный фон PNG)</h4>
+                <div className="space-y-4 mb-6">
+                  <div className="card p-4">
+                    <h4 className="text-sm font-medium text-[var(--foreground)] mb-3">Подпись</h4>
                     <SignaturePad
                       onSignatureChange={(blob) => { setSignatureBlob(blob); if (!blob) setSignaturePdfPosition(null); }}
                       width={560}
@@ -1113,8 +1060,8 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                     />
                   </div>
                   {file && file.type.startsWith("application/pdf") && signatureBlob && (
-                    <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900/50 p-4">
-                      <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Предпросмотр — перетащите подпись</h4>
+                    <div className="card p-4">
+                      <h4 className="text-sm font-medium text-[var(--foreground)] mb-3">Предпросмотр</h4>
                       <SignaturePreview
                         pdfFile={file}
                         signatureBlob={signatureBlob}
@@ -1128,788 +1075,370 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                   )}
                 </div>
               )}
-              </div>
 
-              {/* Панель настроек */}
-              <div className="lg:w-80 flex-shrink-0 space-y-4">
-                
-                {/* PDF → Изображения */}
+              {/* Settings Panel */}
+              <div className="space-y-4">
+                {/* PDF to Image */}
                 {activeTab === "pdfToImage" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Формат вывода</h4>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      {IMAGE_FORMAT_OPTIONS.map((format) => (
-                        <button
-                          key={format.value}
-                          type="button"
-                          className={`btn-ui relative justify-start rounded-xl border px-3 py-2.5 text-left transition-colors ${
-                            convertFormat === format.value
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
-                              : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
-                          }`}
-                          onClick={() => setConvertFormat(format.value)}
-                        >
-                          {convertFormat === format.value && (
-                            <CheckCircle2 className="absolute right-2.5 top-2.5 h-4 w-4 text-amber-600 dark:text-amber-300" />
-                          )}
-                          <div className="flex items-center gap-2">
-                            <img src={format.icon} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
-                            <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">{format.title}</span>
-                          </div>
-                          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{format.hint}</p>
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      onClick={handleConvert}
-                      disabled={isLoading || !selectedPdfFile}
-                      className={getPrimaryButtonClass(Boolean(selectedPdfFile), true)}
-                    >
-                      {isLoading && selectedPdfFile ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
-                          Обработка...
-                        </>
-                      ) : (
-                        <>Конвертировать в {convertFormat || 'формат'}</>
-                      )}
-                    </button>
-                  </div>
-                )}
-                
-                {/* Картинки → PDF */}
-                {activeTab === "imageToPdf" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">Соберёт все изображения в один PDF-документ</p>
-                    <button
-                      onClick={handleImageConvert}
-                      disabled={isLoading || !hasOnlyImages}
-                      className={getPrimaryButtonClass(Boolean(hasOnlyImages))}
-                    >
-                      {isLoading && hasOnlyImages ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Конвертация...
-                        </>
-                      ) : (
-                        'Создать PDF'
-                      )}
-                    </button>
+                  <div className="flex flex-wrap gap-2">
+                    {IMAGE_FORMAT_OPTIONS.map((format) => (
+                      <button
+                        key={format.value}
+                        onClick={() => setConvertFormat(format.value)}
+                        className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        {format.title}
+                      </button>
+                    ))}
                   </div>
                 )}
 
-                {/* Конвертер изображений */}
+                {/* Image Converter */}
                 {activeTab === "imageConverter" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Формат вывода</h4>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      {IMAGE_FORMAT_OPTIONS.map((format) => (
-                        <button
-                          key={format.value}
-                          type="button"
-                          className={`btn-ui relative justify-start rounded-xl border px-3 py-2.5 text-left transition-colors ${
-                            convertFormat === format.value
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
-                              : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
-                          }`}
-                          onClick={() => setConvertFormat(format.value)}
-                        >
-                          {convertFormat === format.value && (
-                            <CheckCircle2 className="absolute right-2.5 top-2.5 h-4 w-4 text-amber-600 dark:text-amber-300" />
-                          )}
-                          <div className="flex items-center gap-2">
-                            <img src={format.icon} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
-                            <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">{format.title}</span>
-                          </div>
-                          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{format.hint}</p>
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      onClick={handleImageFormatConvert}
-                      disabled={isLoading || !hasOnlyImages}
-                      className={getPrimaryButtonClass(Boolean(hasOnlyImages), true)}
-                    >
-                      {isLoading && hasOnlyImages ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
-                          Конвертация...
-                        </>
-                      ) : (
-                        <>Конвертировать в {convertFormat || "формат"}</>
-                      )}
-                    </button>
+                  <div className="flex flex-wrap gap-2">
+                    {IMAGE_FORMAT_OPTIONS.map((format) => (
+                      <button
+                        key={format.value}
+                        onClick={() => setConvertFormat(format.value)}
+                        className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        {format.title}
+                      </button>
+                    ))}
                   </div>
                 )}
 
-                {/* PDF в Word */}
-                {activeTab === "pdfToWord" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">
-                      Извлечёт текст из PDF и создаст документ Word. Работает с текстовыми PDF (не со сканами).
-                    </p>
-                    <button
-                      onClick={handlePDFToWord}
-                      disabled={isLoading || !selectedPdfFile}
-                      className={getPrimaryButtonClass(Boolean(selectedPdfFile))}
-                    >
-                      {isLoading ? (
-                        <><span className="animate-spin">⏳</span> Конвертация...</>
-                      ) : (
-                        'Сохранить как Word (.docx)'
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* PDF в Excel */}
-                {activeTab === "pdfToExcel" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">
-                      Извлечёт текст и создаст таблицу Excel (каждая страница — отдельный лист).
-                    </p>
-                    <button
-                      onClick={handlePDFToExcel}
-                      disabled={isLoading || !selectedPdfFile}
-                      className={getPrimaryButtonClass(Boolean(selectedPdfFile))}
-                    >
-                      {isLoading ? (
-                        <><span className="animate-spin">⏳</span> Конвертация...</>
-                      ) : (
-                        'Сохранить как Excel (.xlsx)'
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* PDF в ZIP */}
+                {/* PDF to ZIP */}
                 {activeTab === "pdfToZip" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Формат изображений в архиве</h4>
-                    <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                      {IMAGE_FORMAT_OPTIONS.map((format) => (
-                        <button
-                          key={format.value}
-                          type="button"
-                          className={`btn-ui relative justify-start rounded-xl border px-3 py-2.5 text-left transition-colors ${
-                            convertFormat === format.value
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
-                              : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
-                          }`}
-                          onClick={() => setConvertFormat(format.value)}
-                        >
-                          {convertFormat === format.value && (
-                            <CheckCircle2 className="absolute right-2.5 top-2.5 h-4 w-4 text-amber-600 dark:text-amber-300" />
-                          )}
-                          <div className="flex items-center gap-2">
-                            <img src={format.icon} alt="" className="h-7 w-7 shrink-0 rounded-md object-contain" />
-                            <span className="text-sm font-semibold text-stone-900 dark:text-stone-100">{format.title}</span>
-                          </div>
-                          <p className="mt-1 text-xs text-stone-500 dark:text-stone-400">{format.hint}</p>
-                        </button>
-                      ))}
+                  <div className="flex flex-wrap gap-2">
+                    {IMAGE_FORMAT_OPTIONS.map((format) => (
+                      <button
+                        key={format.value}
+                        onClick={() => setConvertFormat(format.value)}
+                        className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        {format.title}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Compress */}
+                {activeTab === "compress" && (
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { level: "low", name: "Низкое" },
+                      { level: "medium", name: "Среднее" },
+                      { level: "high", name: "Высокое" },
+                    ].map((c) => (
+                      <button
+                        key={c.level}
+                        onClick={() => setCompressionLevel(c.level)}
+                        className={`btn btn-sm ${compressionLevel === c.level ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        {c.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+
+                {/* Split */}
+                {activeTab === "split" && (
+                  <div className="space-y-3">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setSplitMode("all")}
+                        className={`btn btn-sm ${splitMode === "all" ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        По страницам
+                      </button>
+                      <button
+                        onClick={() => setSplitMode("range")}
+                        className={`btn btn-sm ${splitMode === "range" ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        Диапазон
+                      </button>
                     </div>
-                    <button
-                      onClick={handlePdfToZip}
-                      disabled={isLoading || !selectedPdfFile}
-                      className={getPrimaryButtonClass(Boolean(selectedPdfFile), true)}
-                    >
-                      {isLoading ? (
-                        <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> Создание архива...</>
-                      ) : (
-                        <>Скачать страницы как ZIP</>
-                      )}
-                    </button>
+                    {splitMode === "range" && (
+                      <input
+                        type="text"
+                        value={splitRange}
+                        onChange={(e) => setSplitRange(e.target.value)}
+                        placeholder="1, 3, 5 или 1-5"
+                        className="w-full"
+                      />
+                    )}
                   </div>
                 )}
 
-                {/* Извлечь текст */}
-                {activeTab === "extractText" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">
-                      Извлечёт текст со всех страниц. Подходит для текстовых PDF (не для сканов).
-                    </p>
-                    <button
-                      onClick={handleExtractText}
-                      disabled={isLoading || !selectedPdfFile}
-                      className={getPrimaryButtonClass(Boolean(selectedPdfFile))}
-                    >
-                      {isLoading ? (
-                        <><svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg> Извлечение...</>
-                      ) : (
-                        "Извлечь текст"
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* Подпись */}
+                {/* Signature Settings */}
                 {activeTab === "signature" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4 space-y-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white">Страницы для подписи</h4>
-                    <div className="space-y-2">
-                      {[
-                        { mode: "all" as const, label: "Все страницы" },
-                        { mode: "select" as const, label: "Выбрать страницы" },
-                      ].map((opt) => (
-                        <label key={opt.mode} className="flex items-center gap-2 cursor-pointer">
-                          <input
-                            type="radio"
-                            checked={signaturePagesMode === opt.mode}
-                            onChange={() => setSignaturePagesMode(opt.mode)}
-                            className="rounded border-stone-300"
-                          />
-                          <span className="text-sm text-stone-700 dark:text-stone-300">{opt.label}</span>
-                        </label>
-                      ))}
+                  <div className="space-y-4">
+                    <div>
+                      <label className="text-sm text-[var(--muted)] mb-2 block">Страницы</label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => setSignaturePagesMode("all")}
+                          className={`btn btn-sm ${signaturePagesMode === "all" ? "btn-primary" : "btn-secondary"}`}
+                        >
+                          Все
+                        </button>
+                        <button
+                          onClick={() => setSignaturePagesMode("select")}
+                          className={`btn btn-sm ${signaturePagesMode === "select" ? "btn-primary" : "btn-secondary"}`}
+                        >
+                          Выбрать
+                        </button>
+                      </div>
                       {signaturePagesMode === "select" && (
                         <input
                           type="text"
                           value={signaturePagesRange}
                           onChange={(e) => setSignaturePagesRange(e.target.value)}
                           placeholder="1, 3, 5 или 1-5"
-                          className="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600 rounded-lg bg-white dark:bg-stone-800"
+                          className="w-full mt-2"
                         />
                       )}
-                      {pdfPageCount > 0 && (
-                        <p className="text-xs text-stone-500">Всего страниц: {pdfPageCount}</p>
-                      )}
                     </div>
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white pt-2">Позиция по умолчанию</h4>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {[
-                        { id: "bottom-right" as const, label: "Справа внизу" },
-                        { id: "bottom-left" as const, label: "Слева внизу" },
-                        { id: "top-right" as const, label: "Справа вверху" },
-                        { id: "top-left" as const, label: "Слева вверху" },
-                        { id: "center" as const, label: "По центру" },
-                      ].map((pos) => (
-                        <button
-                          key={pos.id}
-                          type="button"
-                          onClick={() => setSignaturePosition(pos.id)}
-                          className={`btn-ui py-2 px-2 rounded-lg text-xs border transition-colors ${
-                            signaturePosition === pos.id
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                              : "btn-secondary border-stone-200 dark:border-stone-600"
-                          }`}
-                        >
-                          {pos.label}
-                        </button>
-                      ))}
-                    </div>
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white pt-2">Цвет подписи</h4>
-                    <div className="flex flex-wrap gap-2">
-                      {SIGNATURE_COLORS.map((c) => (
-                        <button
-                          key={c.value}
-                          type="button"
-                          onClick={() => setSignatureColor(c.value)}
-                          className={`btn-ui btn-icon w-8 h-8 rounded-lg border-2 transition-all ${
-                            signatureColor === c.value
-                              ? "border-amber-500 ring-2 ring-amber-200 dark:ring-amber-800"
-                              : "border-stone-200 dark:border-stone-600 hover:border-stone-400"
-                          }`}
-                          style={{ backgroundColor: c.value }}
-                          title={c.name}
-                        />
-                      ))}
-                    </div>
-                    <button
-                      onClick={handleAddSignature}
-                      disabled={isLoading || !selectedPdfFile || !signatureBlob}
-                      className={getPrimaryButtonClass(Boolean(selectedPdfFile && signatureBlob))}
-                    >
-                      {isLoading ? (
-                        <><span className="animate-spin">⏳</span> Добавление подписи...</>
-                      ) : (
-                        'Добавить подпись в PDF'
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* Сжатие */}
-                {activeTab === "compress" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white mb-3">Уровень сжатия</h4>
-                    <div className="flex gap-2">
-                      {[
-                        { level: "low", name: "Низкое", size: "~80%" },
-                        { level: "medium", name: "Среднее", size: "~60%" },
-                        { level: "high", name: "Высокое", size: "~40%" },
-                      ].map((compression) => (
-                        <button
-                          key={compression.level}
-                          onClick={() => setCompressionLevel(compression.level)}
-                          className={`btn-ui flex-1 flex flex-col items-center p-2.5 rounded-lg border text-center transition-colors ${
-                            compressionLevel === compression.level
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30"
-                              : "btn-secondary border-stone-200 dark:border-stone-600"
-                          }`}
-                        >
-                          <span className="text-xs font-medium text-stone-900 dark:text-white block">{compression.name}</span>
-                          <span className="text-[10px] text-stone-500 dark:text-stone-400">{compression.size}</span>
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      onClick={handleCompress}
-                      disabled={isLoading}
-                      className={getPrimaryButtonClass(!isLoading, true)}
-                    >
-                      {isLoading ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Сжатие...
-                        </>
-                      ) : (
-                        'Сжать PDF'
-                      )}
-                    </button>
-                  </div>
-                )}
-                
-                {/* Объединить */}
-                {activeTab === "merge" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4">
-                    <p className="text-sm text-stone-600 dark:text-stone-400 mb-4">
-                      Объединит выбранные PDF в один документ (порядок — по списку файлов)
-                    </p>
-                    <button
-                      onClick={handleMerge}
-                      disabled={isLoading || !hasAtLeastTwoPdfFiles}
-                      className={getPrimaryButtonClass(Boolean(!isLoading && hasAtLeastTwoPdfFiles))}
-                    >
-                      {isLoading ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Объединение...
-                        </>
-                      ) : (
-                        'Объединить PDF'
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* Организовать страницы */}
-                {activeTab === "organizePages" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4 space-y-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white">Действия со страницами</h4>
-                    <p className="text-sm text-stone-600 dark:text-stone-400">
-                      Используйте режим просмотра слева: сортировка, поворот, удаление, обрезка и добавление пустых страниц.
-                    </p>
-                    <div className="space-y-1 text-xs text-stone-500 dark:text-stone-400">
-                      <p>Всего элементов в ленте: {organizerPages.length}</p>
-                      <p>Активных страниц: {organizerPages.filter((p) => !p.deleted).length}</p>
-                    </div>
-                    <button
-                      onClick={handleOrganizePages}
-                      disabled={isLoading || !selectedPdfFile || organizerPages.filter((p) => !p.deleted).length === 0 || !hasOrganizeChanges}
-                      className={getPrimaryButtonClass(
-                        Boolean(!isLoading && selectedPdfFile && organizerPages.filter((p) => !p.deleted).length > 0 && hasOrganizeChanges),
-                        true
-                      )}
-                    >
-                      {isLoading ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Сохранение...
-                        </>
-                      ) : (
-                        "Применить изменения страниц"
-                      )}
-                    </button>
-                  </div>
-                )}
-
-                {/* Разделить */}
-                {activeTab === "split" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4 space-y-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white">Способ разделения</h4>
-                    <div className="flex gap-2">
-                      {[
-                        { mode: "all" as const, name: "По страницам" },
-                        { mode: "range" as const, name: "Диапазон" },
-                      ].map((opt) => (
-                        <button
-                          key={opt.mode}
-                          type="button"
-                          onClick={() => setSplitMode(opt.mode)}
-                          className={`btn-ui flex-1 py-2 px-3 rounded-lg text-sm border transition-colors ${
-                            splitMode === opt.mode
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                              : "btn-secondary border-stone-200 dark:border-stone-600"
-                          }`}
-                        >
-                          {opt.name}
-                        </button>
-                      ))}
-                    </div>
-                    {splitMode === "range" && (
-                      <div>
-                        <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">
-                          Номера страниц
-                        </label>
-                        <input
-                          type="text"
-                          value={splitRange}
-                          onChange={(e) => setSplitRange(e.target.value)}
-                          placeholder="1, 3, 5 или 1-5"
-                          className="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600 rounded-lg bg-white dark:bg-stone-800 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                        />
+                    <div>
+                      <label className="text-sm text-[var(--muted)] mb-2 block">Цвет</label>
+                      <div className="flex gap-2">
+                        {SIGNATURE_COLORS.map((c) => (
+                          <button
+                            key={c.value}
+                            onClick={() => setSignatureColor(c.value)}
+                            className={`w-8 h-8 rounded border-2 ${signatureColor === c.value ? "border-[var(--foreground)]" : "border-transparent"}`}
+                            style={{ backgroundColor: c.value }}
+                            title={c.name}
+                          />
+                        ))}
                       </div>
-                    )}
-                    <button
-                      onClick={handleSplit}
-                      disabled={isLoading || !selectedPdfFile}
-                      className={getPrimaryButtonClass(Boolean(!isLoading && selectedPdfFile))}
-                    >
-                      {isLoading ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Разделение...
-                        </>
-                      ) : (
-                        'Разделить PDF'
-                      )}
-                    </button>
+                    </div>
                   </div>
                 )}
 
-                {/* Редактировать */}
+                {/* Edit Settings */}
                 {activeTab === "edit" && (
-                  <div className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/50 dark:bg-stone-800/30 p-4 space-y-4">
-                    <h4 className="text-sm font-semibold text-stone-900 dark:text-white">Действия</h4>
-                    <p className="text-xs text-stone-500 dark:text-stone-400">
-                      В превью слева поворачивайте страницы по одной. Здесь — поворот всех или водяной знак.
-                    </p>
+                  <div className="space-y-4">
                     <div className="flex gap-2">
-                      {[
-                        { tool: "Повернуть", icon: RotateCw },
-                        { tool: "Водяной знак", icon: FileText },
-                      ].map(({ tool, icon: Icon }) => (
-                        <button
-                          key={tool}
-                          onClick={() => toggleEditTool(tool)}
-                          className={`btn-ui flex-1 flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg text-sm border transition-colors ${
-                            editTools.includes(tool)
-                              ? "border-amber-500 bg-amber-50 dark:bg-amber-900/30 text-amber-800 dark:text-amber-200"
-                              : "btn-secondary border-stone-200 dark:border-stone-600"
-                          }`}
-                        >
-                          <Icon className="h-4 w-4" />
-                          {tool}
-                        </button>
-                      ))}
+                      <button
+                        onClick={() => toggleEditTool("Повернуть")}
+                        className={`btn btn-sm ${editTools.includes("Повернуть") ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        <RotateCw className="w-4 h-4" />
+                        Повернуть
+                      </button>
+                      <button
+                        onClick={() => toggleEditTool("Водяной знак")}
+                        className={`btn btn-sm ${editTools.includes("Водяной знак") ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        <FileText className="w-4 h-4" />
+                        Водяной знак
+                      </button>
                     </div>
-                    
                     {editTools.includes("Повернуть") && (
-                      <div>
-                        <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-2">Угол поворота</label>
-                        <div className="grid grid-cols-3 gap-2">
-                          {([90, 180, 270] as const).map((angle) => (
-                            <button
-                              key={angle}
-                              type="button"
-                              onClick={() => setRotateAngle(angle)}
-                              className={`btn-ui rounded-xl border px-2 py-2.5 text-center transition-colors ${
-                                rotateAngle === angle
-                                  ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
-                                  : "btn-secondary border-stone-200 dark:border-stone-600 bg-white/70 dark:bg-stone-800"
-                              }`}
-                            >
-                              <div className="flex items-center justify-center gap-1.5 text-sm font-semibold">
-                                <RotateCw className="h-3.5 w-3.5" />
-                                {angle}°
-                              </div>
-                              <p className="mt-0.5 text-[10px] text-stone-500 dark:text-stone-400">
-                                {angle === 90 ? "вправо" : angle === 180 ? "перевернуть" : "влево"}
-                              </p>
-                            </button>
-                          ))}
-                        </div>
+                      <div className="flex gap-2">
+                        {([90, 180, 270] as const).map((angle) => (
+                          <button
+                            key={angle}
+                            onClick={() => setRotateAngle(angle)}
+                            className={`btn btn-sm ${rotateAngle === angle ? "btn-primary" : "btn-secondary"}`}
+                          >
+                            {angle}°
+                          </button>
+                        ))}
                       </div>
                     )}
                     {editTools.includes("Водяной знак") && (
-                      <div>
-                        <label className="block text-xs font-medium text-stone-600 dark:text-stone-400 mb-1.5">Текст</label>
-                        <input
-                          type="text"
-                          value={watermarkText}
-                          onChange={(e) => setWatermarkText(e.target.value)}
-                          className="w-full px-3 py-2 text-sm border border-stone-300 dark:border-stone-600 rounded-lg bg-white dark:bg-stone-800 focus:ring-2 focus:ring-amber-500 focus:border-transparent"
-                        />
-                      </div>
+                      <input
+                        type="text"
+                        value={watermarkText}
+                        onChange={(e) => setWatermarkText(e.target.value)}
+                        placeholder="Текст водяного знака"
+                        className="w-full"
+                      />
                     )}
-                    
-                    <button
-                      onClick={handleEdit}
-                      disabled={isLoading || (!hasPageRotations && !hasWatermark && !hasGlobalRotate)}
-                      className={getPrimaryButtonClass(Boolean(!isLoading && (hasPageRotations || hasWatermark || hasGlobalRotate)), true)}
-                    >
-                      {isLoading ? (
-                        <>
-                          <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Редактирование...
-                        </>
-                      ) : (
-                        "Редактировать PDF"
-                      )}
-                    </button>
                   </div>
                 )}
-              </div>
-            </div>
 
-            {/* Сообщение о статусе */}
-            {statusMessage && (
-              <div className={`mb-6 p-4 rounded-xl flex items-center gap-3 ${
-                statusMessage.type === 'success' 
-                  ? 'bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800' 
-                  : 'bg-red-50 dark:bg-red-950/50 text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800'
-              }`}>
-                {statusMessage.type === 'success' ? (
-                  <CheckCircle2 className="h-5 w-5 shrink-0" />
-                ) : (
-                  <XCircle className="h-5 w-5 shrink-0" />
-                )}
-                <span className="font-medium">{statusMessage.text}</span>
-              </div>
-            )}
-
-            {/* Результаты конвертации */}
-            {conversionResults.length > 0 && (
-              <div className="mt-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-medium text-zinc-900 dark:text-white">
-                    Результаты конвертации
-                  </h3>
-                  <button
-                    onClick={downloadAllAsZip}
-                    disabled={isLoading}
-                    className="btn-ui bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400 text-stone-900 dark:text-white"
-                  >
-                    <Download className="h-4 w-4 mr-1.5" />
-                    Скачать все (ZIP)
-                  </button>
+                {/* Action Buttons */}
+                <div className="pt-4">
+                  {activeTab === "pdfToImage" && (
+                    <button onClick={handleConvert} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
+                      {isLoading ? "Обработка..." : `Конвертировать в ${convertFormat || "формат"}`}
+                    </button>
+                  )}
+                  {activeTab === "imageToPdf" && (
+                    <button onClick={handleImageConvert} disabled={isLoading || !hasOnlyImages} className="btn btn-primary w-full">
+                      {isLoading ? "Конвертация..." : "Создать PDF"}
+                    </button>
+                  )}
+                  {activeTab === "imageConverter" && (
+                    <button onClick={handleImageFormatConvert} disabled={isLoading || !hasOnlyImages} className="btn btn-primary w-full">
+                      {isLoading ? "Конвертация..." : `Конвертировать в ${convertFormat || "формат"}`}
+                    </button>
+                  )}
+                  {activeTab === "pdfToWord" && (
+                    <button onClick={handlePDFToWord} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
+                      {isLoading ? "Конвертация..." : "Сохранить как Word"}
+                    </button>
+                  )}
+                  {activeTab === "pdfToExcel" && (
+                    <button onClick={handlePDFToExcel} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
+                      {isLoading ? "Конвертация..." : "Сохранить как Excel"}
+                    </button>
+                  )}
+                  {activeTab === "pdfToZip" && (
+                    <button onClick={handlePdfToZip} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
+                      {isLoading ? "Создание архива..." : "Скачать как ZIP"}
+                    </button>
+                  )}
+                  {activeTab === "extractText" && (
+                    <button onClick={handleExtractText} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
+                      {isLoading ? "Извлечение..." : "Извлечь текст"}
+                    </button>
+                  )}
+                  {activeTab === "merge" && (
+                    <button onClick={handleMerge} disabled={isLoading || !hasAtLeastTwoPdfFiles} className="btn btn-primary w-full">
+                      {isLoading ? "Объединение..." : "Объединить PDF"}
+                    </button>
+                  )}
+                  {activeTab === "split" && (
+                    <button onClick={handleSplit} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
+                      {isLoading ? "Разделение..." : "Разделить PDF"}
+                    </button>
+                  )}
+                  {activeTab === "compress" && (
+                    <button onClick={handleCompress} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
+                      {isLoading ? "Сжатие..." : "Сжать PDF"}
+                    </button>
+                  )}
+                  {activeTab === "signature" && (
+                    <button onClick={handleAddSignature} disabled={isLoading || !selectedPdfFile || !signatureBlob} className="btn btn-primary w-full">
+                      {isLoading ? "Добавление..." : "Добавить подпись"}
+                    </button>
+                  )}
+                  {activeTab === "edit" && (
+                    <button onClick={handleEdit} disabled={isLoading || (!hasPageRotations && !hasWatermark && !hasGlobalRotate)} className="btn btn-primary w-full">
+                      {isLoading ? "Редактирование..." : "Применить изменения"}
+                    </button>
+                  )}
+                  {activeTab === "organizePages" && (
+                    <button onClick={handleOrganizePages} disabled={isLoading || !selectedPdfFile || !hasOrganizeChanges} className="btn btn-primary w-full">
+                      {isLoading ? "Сохранение..." : "Применить изменения"}
+                    </button>
+                  )}
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {conversionResults.map((result, index) => (
-                    <div key={index} className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-4 flex items-center justify-between">
-                      <div className="flex items-center">
-                        <div className="w-10 h-10 bg-zinc-200 dark:bg-zinc-700 rounded flex items-center justify-center mr-3">
-                          <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
+              </div>
+
+              {/* Status Message */}
+              {statusMessage && (
+                <div className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${statusMessage.type === 'success' ? 'status-success' : 'status-error'}`}>
+                  {statusMessage.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
+                  <span className="text-sm">{statusMessage.text}</span>
+                </div>
+              )}
+
+              {/* Results */}
+              {conversionResults.length > 0 && (
+                <div className="mt-6 pt-6 border-t border-[var(--border)]">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-medium text-[var(--foreground)]">Результаты</h3>
+                    <button onClick={downloadAllAsZip} disabled={isLoading} className="btn btn-sm btn-secondary">
+                      <Download className="w-4 h-4" />
+                      Скачать все (ZIP)
+                    </button>
+                  </div>
+                  <div className="space-y-2">
+                    {conversionResults.map((result, index) => (
+                      <div key={index} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 bg-[var(--background)] rounded flex items-center justify-center text-xs font-medium text-[var(--muted)]">
                             {result.name.split('.').pop()?.toUpperCase()}
-                          </span>
+                          </div>
+                          <div>
+                            <p className="text-sm text-[var(--foreground)]">{result.name}</p>
+                            <p className="text-xs text-[var(--muted)]">{(result.blob.size / 1024).toFixed(1)} KB</p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="text-sm font-medium text-zinc-900 dark:text-white">
-                            {result.name}
-                          </p>
-                          <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                            {(result.blob.size / 1024).toFixed(2)} KB
-                          </p>
+                        <div className="flex gap-1">
+                          <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost">
+                            <Download className="w-4 h-4" />
+                          </button>
+                          <button onClick={() => deleteResult(result.url, index)} className="btn btn-icon-sm btn-ghost">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
-                      <div className="flex space-x-2">
-                        <button
-                          onClick={() => downloadResult(result.url, result.name)}
-                          className="btn-ui btn-icon btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
-                        >
-                          <Download className="h-5 w-5" />
-                        </button>
-                        <button
-                          onClick={() => deleteResult(result.url, index)}
-                          className="btn-ui btn-icon btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-300"
-                        >
-                          <Trash2 className="h-5 w-5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Извлечённый текст */}
-            {extractedText && extractedText.length > 0 && (
-              <div className="mt-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-medium text-zinc-900 dark:text-white">
-                    Извлечённый текст
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const full = extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n");
-                      void navigator.clipboard.writeText(full);
-                      showStatus("success", "Текст скопирован в буфер обмена", 3000);
-                    }}
-                    className="btn-ui btn-primary"
-                  >
-                    Копировать всё
-                  </button>
-                </div>
-                <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg overflow-hidden">
+              {/* Extracted Text */}
+              {extractedText && extractedText.length > 0 && (
+                <div className="mt-6 pt-6 border-t border-[var(--border)]">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-medium text-[var(--foreground)]">Извлечённый текст</h3>
+                    <button
+                      onClick={() => {
+                        const full = extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n");
+                        void navigator.clipboard.writeText(full);
+                        showStatus("success", "Текст скопирован", 3000);
+                      }}
+                      className="btn btn-sm btn-secondary"
+                    >
+                      Копировать
+                    </button>
+                  </div>
                   <textarea
                     readOnly
-                    className="w-full h-64 p-4 text-sm text-zinc-800 dark:text-zinc-200 bg-white dark:bg-zinc-900 border-0 resize-none font-mono"
+                    className="w-full h-48 p-3 text-sm font-mono bg-[var(--surface)] rounded-lg resize-none"
                     value={extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n")}
                   />
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Результаты сжатия */}
-            {compressResult && (
-              <div className="mt-6">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-medium text-zinc-900 dark:text-white">
-                    Результат сжатия
-                  </h3>
-                  <div className="flex space-x-2">
-                    <button
-                      onClick={downloadCompressedFile}
-                      className="btn-ui bg-emerald-600 hover:bg-emerald-700 text-stone-900 dark:text-white"
-                    >
-                      <Download className="h-4 w-4 mr-1.5" />
-                      Скачать
-                    </button>
-                    <button
-                      onClick={deleteCompressResult}
-                      className="btn-ui btn-icon btn-ghost text-zinc-500 hover:text-red-600 dark:text-zinc-400 dark:hover:text-red-400"
-                      title="Удалить результат"
-                    >
-                      <Trash2 className="h-5 w-5" />
-                    </button>
-                  </div>
-                </div>
-                <div className="border border-zinc-200 dark:border-zinc-700 rounded-lg p-4">
-                  <div className="flex items-center">
-                    <div className="w-10 h-10 bg-zinc-200 dark:bg-zinc-700 rounded flex items-center justify-center mr-3">
-                      <span className="text-xs font-medium text-zinc-700 dark:text-zinc-300">
-                        PDF
-                      </span>
+              {/* Compress Result */}
+              {compressResult && (
+                <div className="mt-6 pt-6 border-t border-[var(--border)]">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-medium text-[var(--foreground)]">Результат сжатия</h3>
+                    <div className="flex gap-2">
+                      <button onClick={downloadCompressedFile} className="btn btn-sm btn-primary">
+                        <Download className="w-4 h-4" />
+                        Скачать
+                      </button>
+                      <button onClick={deleteCompressResult} className="btn btn-icon-sm btn-ghost">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-zinc-900 dark:text-white">
-                        {`compressed-${fileName}`}
-                      </p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Исходный размер: {(compressResult.originalSize / 1024).toFixed(2)} KB
-                      </p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Сжатый размер: {(compressResult.compressedSize / 1024).toFixed(2)} KB
-                      </p>
-                      <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Экономия: {((1 - compressResult.compressedSize / compressResult.originalSize) * 100).toFixed(1)}%
-                      </p>
+                  </div>
+                  <div className="p-4 bg-[var(--surface)] rounded-lg">
+                    <div className="grid grid-cols-3 gap-4 text-center">
+                      <div>
+                        <p className="text-xs text-[var(--muted)]">Было</p>
+                        <p className="text-sm font-medium text-[var(--foreground)]">{formatFileSize(compressResult.originalSize)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[var(--muted)]">Стало</p>
+                        <p className="text-sm font-medium text-[var(--foreground)]">{formatFileSize(compressResult.compressedSize)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-[var(--muted)]">Экономия</p>
+                        <p className="text-sm font-medium text-[var(--foreground)]">
+                          {((1 - compressResult.compressedSize / compressResult.originalSize) * 100).toFixed(0)}%
+                        </p>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-            )}
-
-          </div>
-        </div>
-          </div>
-        </section>
-        )}
-
-        {/* Features — только на главной */}
-        {!standalone && (
-        <section id="features" className="py-16 md:py-24 px-4 sm:px-6 bg-stone-50/50 dark:bg-stone-900/30">
-          <div className="max-w-5xl mx-auto">
-            <div className="text-center">
-              <h2 className="text-2xl md:text-3xl font-bold text-stone-900 dark:text-white">
-                Быстрый и понятный процесс
-              </h2>
-              <p className="mt-4 text-stone-600 dark:text-stone-400 max-w-2xl mx-auto">
-                Без лишних шагов: выберите нужный инструмент, загрузите файл и получите готовый результат.
-              </p>
+              )}
             </div>
 
-            <div className="mt-10 grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2 rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-6 md:p-7">
-                <h3 className="text-lg font-semibold text-stone-900 dark:text-white mb-5">
-                  Почему это удобно
-                </h3>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {[
-                    {
-                      icon: Shield,
-                      title: "Конфиденциально",
-                      desc: "Документы обрабатываются в браузере, без отправки на сервер.",
-                    },
-                    {
-                      icon: Zap,
-                      title: "Быстро",
-                      desc: "Минимум настроек и понятные действия без лишних экранов.",
-                    },
-                    {
-                      icon: FileText,
-                      title: "Все базовые задачи",
-                      desc: "Конвертация, сжатие, объединение, подпись и редактирование PDF.",
-                    },
-                    {
-                      icon: CheckCircle2,
-                      title: "Предсказуемый результат",
-                      desc: "Единый интерфейс и одинаковый сценарий работы для всех инструментов.",
-                    },
-                  ].map((item) => (
-                    <div
-                      key={item.title}
-                      className="rounded-xl border border-stone-200 dark:border-stone-700 bg-stone-50/60 dark:bg-stone-800/40 p-4"
-                    >
-                      <div className="w-10 h-10 rounded-lg bg-amber-50 dark:bg-amber-950/50 flex items-center justify-center mb-3">
-                        <item.icon className="h-5 w-5 text-amber-600 dark:text-amber-400" />
-                      </div>
-                      <p className="font-medium text-stone-900 dark:text-stone-100">{item.title}</p>
-                      <p className="mt-1 text-sm text-stone-600 dark:text-stone-400">{item.desc}</p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <aside className="rounded-2xl border border-stone-200 dark:border-stone-800 bg-white dark:bg-stone-900 p-6 md:p-7">
-                <h3 className="text-lg font-semibold text-stone-900 dark:text-white mb-5">
-                  Как начать
-                </h3>
-                <ol className="space-y-3">
-                  {[
-                    "Откройте нужный инструмент из списка выше",
-                    "Загрузите файл и при необходимости задайте параметры",
-                    "Скачайте обработанный документ",
-                  ].map((step, index) => (
-                    <li key={step} className="flex items-start gap-3">
-                      <span className="inline-flex h-6 w-6 mt-0.5 items-center justify-center rounded-full bg-amber-500 text-xs font-semibold text-stone-900 dark:text-white">
-                        {index + 1}
-                      </span>
-                      <span className="text-sm text-stone-700 dark:text-stone-300">{step}</span>
-                    </li>
-                  ))}
-                </ol>
-              </aside>
+            {/* Ad - Sidebar position on tool page */}
+            <div className="mt-8">
+              <AdPlaceholder size="rectangle" className="mx-auto" />
             </div>
           </div>
         </section>
@@ -1926,7 +1455,7 @@ export default function PDFTools() {
       <div className="min-h-screen flex flex-col">
         <Header />
         <main className="flex-1 flex items-center justify-center">
-          <span className="text-stone-500">Загрузка...</span>
+          <span className="text-[var(--muted)]">Загрузка...</span>
         </main>
         <Footer />
       </div>

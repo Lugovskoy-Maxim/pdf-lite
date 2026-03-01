@@ -1,58 +1,94 @@
 import Link from "next/link";
-import { FileText, Shield, Zap } from "lucide-react";
+import { FileText, Shield, Zap, Heart } from "lucide-react";
 import { TOOLS } from "@/app/tools-config";
 
 export function Footer() {
   const year = new Date().getFullYear();
 
   return (
-    <footer className="border-t border-stone-200 dark:border-stone-800 bg-stone-100 dark:bg-stone-950/80">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 md:py-14">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-10">
-          <div className="md:col-span-2">
-            <Link href="/" className="inline-flex items-center gap-2.5 mb-4 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-stone-950 rounded-lg">
-              <div className="w-9 h-9 rounded-xl bg-amber-500 dark:bg-amber-600 flex items-center justify-center">
-                <FileText className="h-4 w-4 text-white" />
+    <footer className="border-t border-[var(--border)] bg-[var(--surface)]">
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 py-12 md:py-16">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
+          <div className="col-span-2">
+            <Link href="/" className="flex items-center gap-2.5 mb-4">
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-light)] flex items-center justify-center">
+                <FileText className="w-5 h-5 text-white" />
               </div>
-              <span className="font-semibold text-stone-900 dark:text-white">PDF Lite</span>
+              <span className="font-bold text-lg text-[var(--foreground)]">PDF Lite</span>
             </Link>
-            <p className="text-sm text-stone-600 dark:text-stone-400 max-w-md leading-relaxed">
-              Бесплатные онлайн-инструменты для PDF: объединение, сжатие, конвертация и редактирование. Без установки, файлы остаются в браузере.
+            <p className="text-sm text-[var(--muted)] leading-relaxed max-w-xs">
+              Бесплатные онлайн-инструменты для работы с PDF. Все файлы обрабатываются локально в вашем браузере.
             </p>
+            
+            <div className="mt-6 flex flex-wrap gap-3">
+              <div className="badge badge-success">
+                <Shield className="w-3 h-3" />
+                Безопасно
+              </div>
+              <div className="badge badge-accent">
+                <Zap className="w-3 h-3" />
+                Быстро
+              </div>
+            </div>
           </div>
+          
           <div>
-            <h4 className="font-semibold text-stone-900 dark:text-white mb-4">Инструменты</h4>
-            <ul className="space-y-2.5 text-sm text-stone-600 dark:text-stone-400 md:columns-2 md:gap-6">
-              {TOOLS.map((tool) => (
-                <li key={tool.id} className="break-inside-avoid">
-                  <Link href={`/${tool.path}`} className="hover:text-amber-600 dark:hover:text-amber-400 transition-colors inline-block">
+            <h4 className="text-sm font-semibold text-[var(--foreground)] mb-4">Конвертация</h4>
+            <ul className="space-y-2.5 text-sm text-[var(--muted)]">
+              {TOOLS.filter(t => ["pdfToImage", "imageToPdf", "imageConverter", "pdfToWord", "pdfToExcel"].includes(t.id)).map((tool) => (
+                <li key={tool.id}>
+                  <Link 
+                    href={`/${tool.path}`} 
+                    className="hover:text-[var(--foreground)] hover:translate-x-0.5 inline-block transition-all"
+                  >
                     {tool.title.split(" — ")[0]}
                   </Link>
                 </li>
               ))}
             </ul>
           </div>
+          
           <div>
-            <h4 className="font-semibold text-stone-900 dark:text-white mb-4">О сервисе</h4>
-            <ul className="space-y-3 text-sm text-stone-600 dark:text-stone-400">
-              <li className="flex items-center gap-3">
-                <span className="flex-shrink-0 w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 flex items-center justify-center">
-                  <Shield className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                </span>
-                Файлы не покидают браузер
-              </li>
-              <li className="flex items-center gap-3">
-                <span className="flex-shrink-0 w-8 h-8 rounded-lg bg-amber-100 dark:bg-amber-900/50 flex items-center justify-center">
-                  <Zap className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                </span>
-                Работает офлайн
-              </li>
+            <h4 className="text-sm font-semibold text-[var(--foreground)] mb-4">Редактирование</h4>
+            <ul className="space-y-2.5 text-sm text-[var(--muted)]">
+              {TOOLS.filter(t => ["merge", "split", "compress", "organizePages", "edit", "signature"].includes(t.id)).map((tool) => (
+                <li key={tool.id}>
+                  <Link 
+                    href={`/${tool.path}`} 
+                    className="hover:text-[var(--foreground)] hover:translate-x-0.5 inline-block transition-all"
+                  >
+                    {tool.title.split(" — ")[0]}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          </div>
+          
+          <div>
+            <h4 className="text-sm font-semibold text-[var(--foreground)] mb-4">Другое</h4>
+            <ul className="space-y-2.5 text-sm text-[var(--muted)]">
+              {TOOLS.filter(t => ["pdfToZip", "extractText"].includes(t.id)).map((tool) => (
+                <li key={tool.id}>
+                  <Link 
+                    href={`/${tool.path}`} 
+                    className="hover:text-[var(--foreground)] hover:translate-x-0.5 inline-block transition-all"
+                  >
+                    {tool.title.split(" — ")[0]}
+                  </Link>
+                </li>
+              ))}
             </ul>
           </div>
         </div>
-        <div className="mt-12 pt-8 border-t border-stone-200 dark:border-stone-800 flex flex-col sm:flex-row justify-between items-center gap-4">
-          <p className="text-sm text-stone-500 dark:text-stone-500">
-            © {year} PDF Lite
+        
+        <div className="divider my-8" />
+        
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
+          <p className="text-sm text-[var(--muted)]">
+            © {year} PDF Lite. Все инструменты бесплатны.
+          </p>
+          <p className="text-sm text-[var(--muted)] flex items-center gap-1.5">
+            Сделано с <Heart className="w-4 h-4 text-red-500 fill-current" /> для удобства
           </p>
         </div>
       </div>

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { RotateCw } from "lucide-react";
+import { setPdfWorkerSrc } from "@/app/utils/pdfUtils";
 
 interface PDFEditPreviewProps {
   pdfFile: File;
@@ -31,8 +32,9 @@ export function PDFEditPreview({
   const renderPage = useCallback(
     async (pageNum: number, rotation: number) => {
       const pdfjsLib = await import("pdfjs-dist");
+      setPdfWorkerSrc(pdfjsLib);
       const arrayBuffer = await pdfFile.arrayBuffer();
-      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
+      const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
       const page = await pdf.getPage(pageNum);
       const viewport = page.getViewport({
         scale: THUMB_SCALE,
@@ -60,8 +62,9 @@ export function PDFEditPreview({
     (async () => {
       try {
         const pdfjsLib = await import("pdfjs-dist");
+        setPdfWorkerSrc(pdfjsLib);
         const arrayBuffer = await pdfFile.arrayBuffer();
-        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
         if (cancelled) return;
         const n = pdf.numPages;
         const urls: (string | null)[] = [];

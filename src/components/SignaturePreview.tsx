@@ -2,6 +2,7 @@
 
 import { useRef, useState, useEffect, useCallback } from "react";
 import type { SignaturePosition } from "../app/utils/pdfUtils";
+import { setPdfWorkerSrc } from "../app/utils/pdfUtils";
 
 interface SignaturePreviewProps {
   pdfFile: File;
@@ -68,10 +69,10 @@ export function SignaturePreview({
     (async () => {
       try {
         const pdfjsLib = await import("pdfjs-dist");
+        setPdfWorkerSrc(pdfjsLib);
         const arrayBuffer = await pdfFile.arrayBuffer();
         const pdf = await pdfjsLib.getDocument({
           data: arrayBuffer,
-          disableWorker: true,
           useSystemFonts: true,
           disableFontFace: true,
         } as any).promise;

@@ -47,13 +47,13 @@ export function ThemeToggle() {
   if (!mounted) return null;
 
   return (
-    <div className="inline-flex items-center rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white/80 dark:bg-zinc-900/80 p-1.5 shadow-sm">
+    <div className="inline-flex items-center gap-1 p-1 rounded-lg border border-[var(--border)] bg-[var(--background)]">
       <button
         onClick={() => setMode("light")}
-        className={`btn-ui btn-icon p-1.5 rounded-lg ${
+        className={`p-1.5 rounded transition-colors ${
           theme === "light"
-            ? "btn-secondary bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
-            : "btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            ? "bg-[var(--surface)] text-[var(--foreground)]"
+            : "text-[var(--muted)] hover:text-[var(--foreground)]"
         }`}
         aria-label="Светлая тема"
         title="Светлая тема"
@@ -62,10 +62,10 @@ export function ThemeToggle() {
       </button>
       <button
         onClick={() => setMode("system")}
-        className={`btn-ui btn-icon p-1.5 rounded-lg ${
+        className={`p-1.5 rounded transition-colors ${
           theme === "system"
-            ? "btn-secondary bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
-            : "btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            ? "bg-[var(--surface)] text-[var(--foreground)]"
+            : "text-[var(--muted)] hover:text-[var(--foreground)]"
         }`}
         aria-label="Системная тема"
         title="Системная тема"
@@ -74,10 +74,10 @@ export function ThemeToggle() {
       </button>
       <button
         onClick={() => setMode("dark")}
-        className={`btn-ui btn-icon p-1.5 rounded-lg ${
+        className={`p-1.5 rounded transition-colors ${
           theme === "dark"
-            ? "btn-secondary bg-white text-zinc-900 shadow-sm dark:bg-zinc-800 dark:text-zinc-100"
-            : "btn-ghost text-zinc-500 hover:text-zinc-700 dark:text-zinc-400 dark:hover:text-zinc-200"
+            ? "bg-[var(--surface)] text-[var(--foreground)]"
+            : "text-[var(--muted)] hover:text-[var(--foreground)]"
         }`}
         aria-label="Тёмная тема"
         title="Тёмная тема"

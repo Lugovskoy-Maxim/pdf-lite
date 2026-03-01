@@ -1,5 +1,12 @@
 import { PDFDocument, rgb, degrees } from 'pdf-lib';
 
+/** Устанавливает workerSrc для pdfjs-dist в браузере (нужно вызвать до getDocument). Экспорт для компонентов. */
+export function setPdfWorkerSrc(pdfjsLib: { GlobalWorkerOptions: { workerSrc?: string } }) {
+  if (typeof window !== 'undefined' && !pdfjsLib.GlobalWorkerOptions.workerSrc) {
+    pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.mjs';
+  }
+}
+
 // Функция для сжатия PDF
 export async function compressPDF(file: File, compressionLevel: string): Promise<Blob> {
   const arrayBuffer = await file.arrayBuffer();
@@ -49,9 +56,8 @@ async function compressPDFWithImages(file: File, settings: { quality: number; ma
   
   // Динамический импорт pdf.js для избежания проблем SSR
   const pdfjsLib = await import('pdfjs-dist');
-  
-  // Загружаем PDF с помощью pdf.js
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
+  setPdfWorkerSrc(pdfjsLib);
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
   
   const newPdfDoc = await PDFDocument.create();
   
@@ -129,11 +135,9 @@ export async function convertPDFToImages(file: File, format: string): Promise<Bl
   try {
     // Динамический импорт pdf.js для избежания проблем SSR
     const pdfjsLib = await import('pdfjs-dist');
-    
+    setPdfWorkerSrc(pdfjsLib);
     const arrayBuffer = await file.arrayBuffer();
-    
-    // Загружаем PDF с помощью pdf.js
-    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
     
     // Обрабатываем каждую страницу
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
@@ -199,7 +203,7 @@ export async function createZipFromImages(images: {blob: Blob, name: string}[]):
   return zipBlob;
 }
 
-function getImageMimeAndExtension(format: string): { mime: string; ext: string; quality?: number } {
+export function getImageMimeAndExtension(format: string): { mime: string; ext: string; quality?: number } {
   const normalized = format.toUpperCase();
   if (normalized === "JPG" || normalized === "JPEG") {
     return { mime: "image/jpeg", ext: "jpg", quality: 0.92 };
@@ -399,17 +403,23 @@ export async function rotatePDFPages(file: File, rotations: number[]): Promise<B
 export async function splitPDF(file: File, pageNumbers: number[]): Promise<Blob[]> {
   const arrayBuffer = await file.arrayBuffer();
   const pdfDoc = await PDFDocument.load(arrayBuffer);
+  const pageCount = pdfDoc.getPageCount();
   const pdfs: Blob[] = [];
-  
-  for (const pageNum of pageNumbers) {
+
+  const validPages = pageNumbers.filter((n) => Number.isFinite(n) && n >= 1 && n <= pageCount);
+  if (validPages.length === 0) {
+    throw new Error('Нет допустимых номеров страниц (ожидаются числа от 1 до ' + pageCount + ')');
+  }
+
+  for (const pageNum of validPages) {
     const newPdfDoc = await PDFDocument.create();
     const [copiedPage] = await newPdfDoc.copyPages(pdfDoc, [pageNum - 1]);
     newPdfDoc.addPage(copiedPage);
-    
+
     const pdfBytes = await newPdfDoc.save();
     pdfs.push(new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' }));
   }
-  
+
   return pdfs;
 }
 
@@ -426,8 +436,9 @@ export async function splitPDFIntoPages(file: File): Promise<Blob[]> {
 export async function extractTextFromPDF(file: File): Promise<{ pageNum: number; text: string }[]> {
   if (typeof window === 'undefined') throw new Error('Доступно только в браузере');
   const pdfjsLib = await import('pdfjs-dist');
+  setPdfWorkerSrc(pdfjsLib);
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
   const result: { pageNum: number; text: string }[] = [];
   for (let i = 1; i <= pdf.numPages; i++) {
     const page = await pdf.getPage(i);
@@ -480,8 +491,9 @@ export type SignaturePosition = 'bottom-right' | 'bottom-left' | 'top-right' | '
 export async function getPDFPageCount(file: File): Promise<number> {
   if (typeof window === 'undefined') return 0;
   const pdfjsLib = await import('pdfjs-dist');
+  setPdfWorkerSrc(pdfjsLib);
   const arrayBuffer = await file.arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer, disableWorker: true } as any).promise;
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
   return pdf.numPages;
 }
 
