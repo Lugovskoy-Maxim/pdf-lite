@@ -6,6 +6,6 @@ export const DEFAULT_KEYWORDS =
   "pdf онлайн, конвертер pdf, объединить pdf, разделить pdf, сжать pdf, редактировать pdf";
 
 export function getSiteUrl() {
-  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://pdf-lite.vercel.app";
+  const baseUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "https://forpdf.ru";
   return baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
 }
