@@ -87,6 +87,7 @@ export function InstrumentPageClient({ tool }: Props) {
   const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [resultPreviewIndex, setResultPreviewIndex] = useState<number | null>(null);
+  const [compressPreviewOpen, setCompressPreviewOpen] = useState(false);
 
   const activeTab = tool.id;
 
@@ -1333,16 +1334,16 @@ export function InstrumentPageClient({ tool }: Props) {
                   </div>
                 </div>
 
-                {/* Conversion progress */}
-                {isLoading && conversionProgress && (
+                {/* Прогресс выполнения — во всех инструментах при загрузке */}
+                {isLoading && (
                   <div className="mt-4 p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
                     <div className="flex items-center gap-3 mb-2">
                       <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin flex-shrink-0" />
                       <span className="text-sm font-medium text-[var(--foreground)]">
-                        {conversionProgress.label}
+                        {conversionProgress?.label ?? "Обработка..."}
                       </span>
                     </div>
-                    {conversionProgress.total > 0 && (
+                    {conversionProgress && conversionProgress.total > 0 && (
                       <div className="h-2 bg-[var(--background)] rounded-full overflow-hidden">
                         <div
                           className="h-full bg-[var(--accent)] transition-[width] duration-700 ease-out"
@@ -1479,17 +1480,21 @@ export function InstrumentPageClient({ tool }: Props) {
                   </div>
                 )}
 
-                {/* Compress Result */}
+                {/* Compress Result — размеры, просмотр, загрузка */}
                 {compressResult && (
                   <div className="mt-6 pt-6 border-t border-[var(--border)]">
                     <div className="flex items-center justify-between mb-4">
                       <h3 className="font-medium text-[var(--foreground)]">Результат</h3>
                       <div className="flex gap-2">
+                        <button onClick={() => setCompressPreviewOpen(true)} className="btn btn-sm btn-secondary" title="Предпросмотр">
+                          <Eye className="w-4 h-4" />
+                          Просмотр
+                        </button>
                         <button onClick={downloadCompressedFile} className="btn btn-sm btn-primary">
                           <Download className="w-4 h-4" />
                           Скачать
                         </button>
-                        <button onClick={() => clearCompressResult()} className="btn btn-icon-sm btn-ghost">
+                        <button onClick={() => { clearCompressResult(); setCompressPreviewOpen(false); }} className="btn btn-icon-sm btn-ghost">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -1510,6 +1515,22 @@ export function InstrumentPageClient({ tool }: Props) {
                             {((1 - compressResult.compressedSize / compressResult.originalSize) * 100).toFixed(0)}%
                           </p>
                         </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {/* Модальное окно предпросмотра сжатого PDF */}
+                {compressPreviewOpen && compressResult && (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setCompressPreviewOpen(false)}>
+                    <div className="bg-[var(--background)] rounded-xl shadow-xl max-w-4xl max-h-[90vh] w-full overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-between p-3 border-b border-[var(--border)]">
+                        <p className="text-sm font-medium truncate">Сжатый PDF</p>
+                        <button type="button" onClick={() => setCompressPreviewOpen(false)} className="p-2 rounded-lg hover:bg-[var(--surface)]">
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                      <div className="flex-1 overflow-auto p-4 flex items-center justify-center min-h-[200px]">
+                        <iframe src={compressResult.url} title="Сжатый PDF" className="w-full rounded border-0" style={{ height: "70vh" }} />
                       </div>
                     </div>
                   </div>

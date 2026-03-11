@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useMemo, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages, rotatePDF, rotatePDFPages, convertImagesToPDF, createZipFromImages, convertPDFToWord, convertPDFToExcel, addSignature, getPDFPageCount, extractTextFromPDF, organizePDFPages, convertImagesBetweenFormats, type OrganizePDFPageOperation, type SignaturePosition } from "./utils/pdfUtils";
-import { Upload, X, Download, Trash2, FileText, Image, RotateCw, CheckCircle2, XCircle, ArrowRight, Shield, Zap, Globe, Sparkles } from 'lucide-react';
+import { Upload, X, Download, Trash2, FileText, Image, RotateCw, CheckCircle2, XCircle, ArrowRight, Shield, Zap, Globe, Sparkles, Eye } from 'lucide-react';
 import { Header } from "../components/Header";
 import { Footer } from "../components/Footer";
 import { AdPlaceholder } from "../components/AdPlaceholder";
@@ -94,6 +94,8 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
   const [previewUrls, setPreviewUrls] = useState<(string | null)[]>([]);
+  const [resultPreviewIndex, setResultPreviewIndex] = useState<number | null>(null);
+  const [compressPreviewOpen, setCompressPreviewOpen] = useState(false);
 
   const fileList = useMemo(() => {
     if (files && files.length > 0) return Array.from(files);
@@ -1518,8 +1520,20 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                 </div>
               </div>
 
+              {/* Прогресс выполнения — во всех инструментах при загрузке */}
+              {isLoading && (
+                <div className="mt-4 p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+                  <div className="flex items-center gap-3">
+                    <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                    <span className="text-sm font-medium text-[var(--foreground)]">
+                      {statusMessage?.text ?? "Обработка..."}
+                    </span>
+                  </div>
+                </div>
+              )}
+
               {/* Status Message */}
-              {statusMessage && (
+              {statusMessage && !isLoading && (
                 <div className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${statusMessage.type === 'success' ? 'status-success' : 'status-error'}`}>
                   {statusMessage.type === 'success' ? <CheckCircle2 className="w-4 h-4" /> : <XCircle className="w-4 h-4" />}
                   <span className="text-sm">{statusMessage.text}</span>
@@ -1556,6 +1570,9 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                             </div>
                           </div>
                           <div className="flex gap-1 flex-shrink-0">
+                            <button onClick={() => setResultPreviewIndex(index)} className="btn btn-icon-sm btn-ghost" title="Предпросмотр">
+                              <Eye className="w-4 h-4" />
+                            </button>
                             <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost" title="Скачать">
                               <Download className="w-4 h-4" />
                             </button>
@@ -1569,6 +1586,34 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                   </div>
                 </div>
               )}
+
+              {/* Модальное окно предпросмотра результата */}
+              {resultPreviewIndex != null && conversionResults[resultPreviewIndex] && (() => {
+                const result = conversionResults[resultPreviewIndex!];
+                const isPdf = result.blob.type === "application/pdf";
+                const isImage = result.blob.type.startsWith("image/");
+                return (
+                  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setResultPreviewIndex(null)}>
+                    <div className="bg-[var(--background)] rounded-xl shadow-xl max-w-4xl max-h-[90vh] w-full overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-between p-3 border-b border-[var(--border)]">
+                        <p className="text-sm font-medium truncate">{result.name}</p>
+                        <button type="button" onClick={() => setResultPreviewIndex(null)} className="p-2 rounded-lg hover:bg-[var(--surface)]">
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+                      <div className="flex-1 overflow-auto p-4 flex items-center justify-center min-h-[200px]">
+                        {isImage ? (
+                          <img src={result.url} alt="" className="max-w-full max-h-[70vh] object-contain rounded" />
+                        ) : isPdf ? (
+                          <iframe src={result.url} title={result.name} className="w-full min-h-[70vh] rounded border-0" style={{ height: "70vh" }} />
+                        ) : (
+                          <p className="text-[var(--muted)]">Предпросмотр недоступен.</p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Extracted Text */}
               {extractedText && extractedText.length > 0 && (
@@ -1608,17 +1653,21 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                 </div>
               )}
 
-              {/* Compress Result */}
+              {/* Compress Result — размеры, просмотр, загрузка */}
               {compressResult && (
                 <div className="mt-6 pt-6 border-t border-[var(--border)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="font-medium text-[var(--foreground)]">Результат сжатия</h3>
                     <div className="flex gap-2">
+                      <button onClick={() => setCompressPreviewOpen(true)} className="btn btn-sm btn-secondary" title="Предпросмотр">
+                        <Eye className="w-4 h-4" />
+                        Просмотр
+                      </button>
                       <button onClick={downloadCompressedFile} className="btn btn-sm btn-primary">
                         <Download className="w-4 h-4" />
                         Скачать
                       </button>
-                      <button onClick={deleteCompressResult} className="btn btn-icon-sm btn-ghost">
+                      <button onClick={() => { deleteCompressResult(); setCompressPreviewOpen(false); }} className="btn btn-icon-sm btn-ghost">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
@@ -1639,6 +1688,22 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                           {((1 - compressResult.compressedSize / compressResult.originalSize) * 100).toFixed(0)}%
                         </p>
                       </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+              {/* Модальное окно предпросмотра сжатого PDF */}
+              {compressPreviewOpen && compressResult && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setCompressPreviewOpen(false)}>
+                  <div className="bg-[var(--background)] rounded-xl shadow-xl max-w-4xl max-h-[90vh] w-full overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                    <div className="flex items-center justify-between p-3 border-b border-[var(--border)]">
+                      <p className="text-sm font-medium truncate">Сжатый PDF</p>
+                      <button type="button" onClick={() => setCompressPreviewOpen(false)} className="p-2 rounded-lg hover:bg-[var(--surface)]">
+                        <X className="w-5 h-5" />
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-auto p-4 flex items-center justify-center min-h-[200px]">
+                      <iframe src={compressResult.url} title="Сжатый PDF" className="w-full rounded border-0" style={{ height: "70vh" }} />
                     </div>
                   </div>
                 </div>
