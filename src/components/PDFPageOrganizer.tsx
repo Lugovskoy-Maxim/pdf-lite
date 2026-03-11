@@ -295,7 +295,7 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange, useServerPr
         )}
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 max-h-[560px] overflow-y-auto pr-1">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 max-h-[520px] overflow-y-auto pr-1">
         {pages.map((page, index) => (
           <div
             key={page.id}
@@ -305,75 +305,81 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange, useServerPr
                 : "border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900"
             }`}
           >
-            <div className="aspect-[3/4] bg-stone-100 dark:bg-stone-800 flex items-center justify-center">
+            <div className="aspect-[3/4] bg-stone-100 dark:bg-stone-800 flex items-center justify-center overflow-hidden">
               {page.previewDataUrl ? (
-                <img src={page.previewDataUrl} alt="" className="max-w-full max-h-full object-contain" />
+                <img
+                  src={page.previewDataUrl}
+                  alt=""
+                  className="max-w-full max-h-full object-contain transition-transform duration-200"
+                  style={{ transform: `rotate(${page.rotation}deg)` }}
+                />
               ) : (
-                <div className="text-center px-4">
-                  <p className="text-sm font-semibold text-stone-700 dark:text-stone-200">Пустая страница</p>
-                  <p className="text-xs text-stone-500 dark:text-stone-400">A4</p>
+                <div className="text-center px-3" style={{ transform: `rotate(${page.rotation}deg)` }}>
+                  <p className="text-xs font-semibold text-stone-700 dark:text-stone-200">Пустая страница</p>
+                  <p className="text-[11px] text-stone-500 dark:text-stone-400">A4</p>
                 </div>
               )}
             </div>
-            <div className="p-3 border-t border-stone-100 dark:border-stone-700 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-stone-700 dark:text-stone-300">
+            <div className="p-2 border-t border-stone-100 dark:border-stone-700 space-y-2">
+              <div className="flex items-center justify-between gap-1">
+                <span className="text-[11px] font-semibold text-stone-700 dark:text-stone-300">
                   #{index + 1} {page.kind === "source" ? `(ориг. ${page.pageNumberLabel})` : "(новая)"}
                 </span>
-                <div className="flex items-center gap-1">
+                <div className="flex items-center gap-0.5">
                   <button
                     type="button"
                     onClick={() => movePage(page.id, -1)}
-                    className="btn-ui btn-ghost p-1.5 text-stone-600 dark:text-stone-300"
+                    className="btn-ui btn-ghost p-1 text-stone-600 dark:text-stone-300"
                     title="Сдвинуть влево"
                   >
-                    <ArrowLeft className="h-3.5 w-3.5" />
+                    <ArrowLeft className="h-3 w-3" />
                   </button>
                   <button
                     type="button"
                     onClick={() => movePage(page.id, 1)}
-                    className="btn-ui btn-ghost p-1.5 text-stone-600 dark:text-stone-300"
+                    className="btn-ui btn-ghost p-1 text-stone-600 dark:text-stone-300"
                     title="Сдвинуть вправо"
                   >
-                    <ArrowRight className="h-3.5 w-3.5" />
+                    <ArrowRight className="h-3 w-3" />
                   </button>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 flex-wrap">
+              <div className="flex items-center gap-1.5 flex-wrap">
                 <button
                   type="button"
                   onClick={() => updatePage(page.id, { rotation: nextRotation(page.rotation) })}
-                  className="btn-ui btn-secondary text-xs px-2.5 py-1.5"
+                  className="btn-ui btn-secondary text-[11px] px-2 py-1"
                 >
-                  <RotateCw className="h-3.5 w-3.5" />
+                  <RotateCw className="h-3 w-3" />
                   {page.rotation}°
                 </button>
                 <button
                   type="button"
                   onClick={() => insertBlankAfter(page.id)}
-                  className="btn-ui btn-secondary text-xs px-2.5 py-1.5"
+                  className="btn-ui btn-secondary text-[11px] px-2 py-1"
+                  title="Добавить пустую страницу после этой"
                 >
-                  <Plus className="h-3.5 w-3.5" />
-                  + Пустая после
+                  <Plus className="h-3 w-3" />
+                  Пустая после
                 </button>
                 <button
                   type="button"
                   onClick={() => updatePage(page.id, { deleted: !page.deleted })}
-                  className={`btn-ui text-xs px-2.5 py-1.5 ${
+                  className={`btn-ui text-[11px] px-2 py-1 ${
                     page.deleted ? "btn-secondary" : "btn-ghost text-red-600 dark:text-red-400"
                   }`}
                 >
-                  {page.deleted ? <Undo2 className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+                  {page.deleted ? <Undo2 className="h-3 w-3" /> : <Trash2 className="h-3 w-3" />}
                   {page.deleted ? "Восстановить" : "Удалить"}
                 </button>
               </div>
 
               {page.kind === "source" && (
                 <div>
-                  <label className="text-[11px] text-stone-500 dark:text-stone-400 flex items-center gap-1.5 mb-1.5">
-                    <Crop className="h-3.5 w-3.5" />
-                    Обрезка полей: {page.cropPercent}%
+                  <label className="text-[10px] text-stone-500 dark:text-stone-400 flex items-center gap-1 mb-1">
+                    <Crop className="h-3 w-3" />
+                    Обрезка: {page.cropPercent}%
                   </label>
                   <input
                     type="range"
@@ -382,7 +388,7 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange, useServerPr
                     step={1}
                     value={page.cropPercent}
                     onChange={(e) => updatePage(page.id, { cropPercent: Number(e.target.value) })}
-                    className="w-full"
+                    className="w-full h-1.5"
                   />
                 </div>
               )}

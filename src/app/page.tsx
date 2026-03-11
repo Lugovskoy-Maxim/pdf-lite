@@ -87,7 +87,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
   const [signaturePreviewPage, setSignaturePreviewPage] = useState(1);
   const [organizerPages, setOrganizerPages] = useState<OrganizerPageItem[]>([]);
-  const [processOnServer, setProcessOnServer] = useState(true);
+  const [processOnServer] = useState(false);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
   const [extractedText, setExtractedText] = useState<{ fileName: string; pages: { pageNum: number; text: string }[] }[] | null>(null);
@@ -1200,27 +1200,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                 </div>
               )}
 
-              {/* Обработка на сервере (до 20 МБ) — standalone */}
-              {showServerOption && (
-                <div className="mb-6">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={processOnServer}
-                      onChange={(e) => setProcessOnServer(e.target.checked)}
-                      className="rounded border-[var(--border)]"
-                    />
-                    <span className="text-sm text-[var(--foreground)]">
-                      Обработка на сервере (макс. 20 МБ)
-                    </span>
-                  </label>
-                  {serverFileTooBig && (
-                    <p className="text-xs text-[var(--muted)] mt-1">
-                      {activeTab === "merge" ? "Суммарный размер файлов больше 20 МБ — объединение в браузере." : "Файл больше 20 МБ — обработка в браузере."}
-                    </p>
-                  )}
-                </div>
-              )}
+              {/* Обработка на сервере (до 20 МБ) — отключено */}
 
               {/* Tool-specific controls */}
               {activeTab === "edit" && file && file.type.startsWith("application/pdf") && pdfPageCount > 0 && (
@@ -1466,27 +1446,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                   </div>
                 )}
 
-                {/* Обработка на сервере (до 20 МБ) — для всех подходящих инструментов */}
-                {showServerOption && (
-                  <div className="mb-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={processOnServer}
-                        onChange={(e) => setProcessOnServer(e.target.checked)}
-                        className="rounded border-[var(--border)]"
-                      />
-                      <span className="text-sm text-[var(--foreground)]">
-                        Обработка на сервере (макс. 20 МБ)
-                      </span>
-                    </label>
-                    {serverFileTooBig && (
-                      <p className="text-xs text-[var(--muted)] mt-1">
-                        {activeTab === "merge" ? "Суммарный размер файлов больше 20 МБ — объединение в браузере." : "Файл больше 20 МБ — обработка в браузере."}
-                      </p>
-                    )}
-                  </div>
-                )}
+                {/* Обработка на сервере (до 20 МБ) — отключено */}
 
                 {/* Action Buttons */}
                 <div className="pt-4">

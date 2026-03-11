@@ -71,7 +71,7 @@ export function InstrumentPageClient({ tool }: Props) {
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
   const [signaturePreviewPage, setSignaturePreviewPage] = useState(1);
   const [organizerPages, setOrganizerPages] = useState<OrganizerPageItem[]>([]);
-  const [processOnServer, setProcessOnServer] = useState(true);
+  const [processOnServer] = useState(false);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
   const [extractedText, setExtractedText] = useState<{ fileName: string; pages: { pageNum: number; text: string }[] }[] | null>(null);
@@ -791,12 +791,36 @@ export function InstrumentPageClient({ tool }: Props) {
             Все инструменты
           </Link>
           <div className="flex items-start gap-3">
-            <div className="icon-box icon-box-accent w-10 h-10 flex-shrink-0">
-              <img src={`/icons/${tool.id}.svg`} alt="" className="w-5 h-5" />
-            </div>
             <div className="min-w-0">
               <h1 className="text-xl md:text-2xl font-bold text-[var(--foreground)]">
-                {toolTitle}
+                {(tool.id === "pdfToImage" || tool.id === "imageToPdf") ? (
+                  <span className="inline-flex items-center gap-3">
+                    {tool.id === "pdfToImage" && (
+                      <>
+                        <FileFormatIcon extension="pdf" size="md" className="w-12 h-12" />
+                        <span className="text-[var(--muted)] text-2xl">→</span>
+                        <FileFormatIcon extension="jpg" size="md" className="w-12 h-12" />
+                        <FileFormatIcon extension="png" size="md" className="w-12 h-12" />
+                        <FileFormatIcon extension="webp" size="md" className="w-12 h-12" />
+                      </>
+                    )}
+                    {tool.id === "imageToPdf" && (
+                      <>
+                        <FileFormatIcon extension="jpg" size="md" className="w-12 h-12" />
+                        <FileFormatIcon extension="png" size="md" className="w-12 h-12" />
+                        <FileFormatIcon extension="webp" size="md" className="w-12 h-12" />
+                        <span className="text-[var(--muted)] text-2xl">→</span>
+                        <FileFormatIcon extension="pdf" size="md" className="w-12 h-12" />
+                      </>
+                    )}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center">
+                    <div className="icon-box icon-box-accent w-14 h-14 flex-shrink-0">
+                      <img src={`/icons/${tool.id}.svg`} alt="" className="w-8 h-8" />
+                    </div>
+                  </span>
+                )}
               </h1>
               <p className="mt-1 text-sm text-[var(--muted)] leading-snug">
                 {tool.description}
@@ -1234,27 +1258,7 @@ export function InstrumentPageClient({ tool }: Props) {
                     </div>
                   )}
 
-                  {/* Обработка на сервере (до 20 МБ) */}
-                  {showServerOption && (
-                    <div className="mb-4">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={processOnServer}
-                          onChange={(e) => setProcessOnServer(e.target.checked)}
-                          className="rounded border-[var(--border)]"
-                        />
-                        <span className="text-sm text-[var(--foreground)]">
-                          Обработка на сервере (макс. 20 МБ)
-                        </span>
-                      </label>
-                      {serverFileTooBig && (
-                        <p className="text-xs text-[var(--muted)] mt-1">
-                          {activeTab === "merge" ? "Суммарный размер файлов больше 20 МБ — объединение в браузере." : "Файл больше 20 МБ — обработка в браузере."}
-                        </p>
-                      )}
-                    </div>
-                  )}
+                  {/* Обработка на сервере (до 20 МБ) — отключено */}
 
                   {/* Action Button */}
                   <div className="pt-4">
