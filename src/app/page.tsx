@@ -635,7 +635,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       for (let i = 0; i < total; i++) {
         const pdfFile = pdfFilesList[i];
         if (total > 1) setStatusMessage({ type: "success", text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
-        const images = await convertPDFToImages(pdfFile, format, undefined, { maxDimension: 1600 });
+        const images = await convertPDFToImages(pdfFile, format);
         const items = images.map((blob, p) => ({ blob, name: `page-${p + 1}.${ext}` }));
         const zipBlob = await createZipFromImages(items);
         const baseName = pdfFile.name.replace(/\.pdf$/i, "");

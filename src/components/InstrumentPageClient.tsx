@@ -647,7 +647,7 @@ export function InstrumentPageClient({ tool }: Props) {
         setConversionProgress({ current: i + 1, total, label: total > 1 ? `Файл ${i + 1} из ${total}` : `Страницы…` });
         const images = await convertPDFToImages(pdfFile, format, (pageNum, pageTotal) => {
           setConversionProgress({ current: (i * 100) + pageNum, total: total * 100, label: `Файл ${i + 1}/${total}, стр. ${pageNum}/${pageTotal}` });
-        }, { maxDimension: 1600 });
+        });
         const baseName = pdfFile.name.replace(/\.pdf$/i, "");
         const items = images.map((blob, p) => ({ blob, name: `page-${p + 1}.${ext}` }));
         const zipBlob = await createZipFromImages(items);
