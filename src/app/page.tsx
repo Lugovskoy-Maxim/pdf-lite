@@ -89,6 +89,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   const [organizerPages, setOrganizerPages] = useState<OrganizerPageItem[]>([]);
   const [processOnServer] = useState(false);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
+  const [conversionSections, setConversionSections] = useState<{ sourceName: string; files: { blob: Blob; url: string; name: string }[] }[] | null>(null);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
   const [extractedText, setExtractedText] = useState<{ fileName: string; pages: { pageNum: number; text: string }[] }[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -169,6 +170,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       prev.forEach((item) => URL.revokeObjectURL(item.url));
       return [];
     });
+    setConversionSections(null);
   };
 
   const clearCompressResult = () => {
@@ -183,6 +185,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       prev.forEach((item) => URL.revokeObjectURL(item.url));
       return next;
     });
+    setConversionSections(null);
   };
 
   const replaceCompressResult = (next: { blob: Blob; url: string; originalSize: number; compressedSize: number } | null) => {
@@ -383,6 +386,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
     setStatusMessage({ type: 'success', text: 'Конвертация...' });
     try {
       const allResults: { blob: Blob; url: string; name: string }[] = [];
+      const sections: { sourceName: string; files: { blob: Blob; url: string; name: string }[] }[] = [];
       const total = pdfFilesList.length;
       for (let fIdx = 0; fIdx < total; fIdx++) {
         const pdfFile = pdfFilesList[fIdx];
@@ -394,16 +398,20 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
         const images = await convertPDFToImages(pdfFile, convertFormat, (current, tot, label) => {
           if (total > 1) setStatusMessage({ type: 'success', text: `Файл ${fIdx + 1}/${total}. ${label ?? ""}` });
         });
+        const sectionFiles: { blob: Blob; url: string; name: string }[] = [];
         for (let i = 0; i < images.length; i++) {
           const name = total > 1 ? `${baseName}-стр${i + 1}.${ext}` : `page-${i + 1}.${ext}`;
-          allResults.push({
-            blob: images[i],
-            url: URL.createObjectURL(images[i]),
-            name,
-          });
+          const item = { blob: images[i], url: URL.createObjectURL(images[i]), name };
+          allResults.push(item);
+          sectionFiles.push(item);
         }
+        if (total > 1) sections.push({ sourceName: pdfFile.name, files: sectionFiles });
       }
-      replaceConversionResults(allResults);
+      setConversionResults((prev) => {
+        prev.forEach((item) => URL.revokeObjectURL(item.url));
+        return allResults;
+      });
+      setConversionSections(total > 1 ? sections : null);
       const totalPages = allResults.length;
       showStatus('success', total > 1 ? `Готово: ${total} файлов, ${totalPages} изображений` : `Конвертация завершена! ${totalPages} страниц(а)`, 5000);
     } catch (error) {
@@ -826,9 +834,45 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
     document.body.removeChild(a);
   };
 
+  const downloadSectionAsZip = async (sectionIndex: number) => {
+    if (!conversionSections?.[sectionIndex]) return;
+    setIsLoading(true);
+    try {
+      const zipBlob = await createZipFromImages(conversionSections[sectionIndex].files);
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${conversionSections[sectionIndex].sourceName.replace(/\.pdf$/i, "")}-страницы.zip`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const deleteResult = (url: string, index: number) => {
     URL.revokeObjectURL(url);
-    setConversionResults(prev => prev.filter((_, i) => i !== index));
+    setConversionResults((prev) => prev.filter((_, i) => i !== index));
+    if (conversionSections) {
+      let flatIdx = 0;
+      for (let s = 0; s < conversionSections.length; s++) {
+        const section = conversionSections[s];
+        const fileIdx = index - flatIdx;
+        if (fileIdx >= 0 && fileIdx < section.files.length) {
+          setConversionSections((prev) => {
+            if (!prev) return null;
+            const next = [...prev];
+            next[s] = { ...next[s], files: next[s].files.filter((_, i) => i !== fileIdx) };
+            if (next[s].files.length === 0) next.splice(s, 1);
+            return next.length > 0 ? next : null;
+          });
+          break;
+        }
+        flatIdx += section.files.length;
+      }
+    }
   };
 
   const downloadCompressedFile = () => {
@@ -1524,45 +1568,101 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                 <div className="mt-6 pt-6 border-t border-[var(--border)]">
                   <div className="flex items-center justify-between mb-4">
                     <h3 className="font-medium text-[var(--foreground)]">Результаты</h3>
-                    <button onClick={downloadAllAsZip} disabled={isLoading} className="btn btn-sm btn-secondary">
-                      <Download className="w-4 h-4" />
-                      Скачать все (ZIP)
-                    </button>
+                    {(conversionSections?.length ? conversionSections.length > 1 : conversionResults.length > 1) && (
+                      <button onClick={downloadAllAsZip} disabled={isLoading} className="btn btn-sm btn-secondary">
+                        <Download className="w-4 h-4" />
+                        Скачать все (ZIP)
+                      </button>
+                    )}
                   </div>
-                  <div className="space-y-2">
-                    {conversionResults.map((result, index) => {
-                      const isImage = result.blob.type.startsWith("image/");
-                      const ext = result.name.split(".").pop()?.toLowerCase() ?? "";
-                      return (
-                        <div key={index} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg gap-3">
-                          <div className="flex items-center gap-3 min-w-0 flex-1">
-                            <div className="w-14 h-14 rounded-lg bg-[var(--background)] flex items-center justify-center overflow-hidden flex-shrink-0">
-                              {isImage ? (
-                                <img src={result.url} alt="" className="w-full h-full object-cover" />
-                              ) : (
-                                <FileFormatIcon extension={ext} size="md" />
-                              )}
+                  {conversionSections && conversionSections.length > 0 ? (
+                    <div className="space-y-6">
+                      {conversionSections.map((section, sectionIndex) => {
+                        const flatStart = conversionSections.slice(0, sectionIndex).reduce((acc, s) => acc + s.files.length, 0);
+                        return (
+                          <div key={sectionIndex} className="rounded-lg border border-[var(--border)] overflow-hidden">
+                            <div className="flex items-center justify-between p-3 bg-[var(--surface)] border-b border-[var(--border)]">
+                              <span className="text-sm font-medium text-[var(--foreground)] truncate" title={section.sourceName}>{section.sourceName}</span>
+                              <button onClick={() => downloadSectionAsZip(sectionIndex)} disabled={isLoading} className="btn btn-sm btn-secondary">
+                                <Download className="w-4 h-4" />
+                                Скачать
+                              </button>
                             </div>
-                            <div className="min-w-0">
-                              <p className="text-sm text-[var(--foreground)] truncate" title={result.name}>{result.name}</p>
-                              <p className="text-xs text-[var(--muted)]">{formatFileSize(result.blob.size)}</p>
+                            <div className="p-2 space-y-2">
+                              {section.files.map((result, fileIndex) => {
+                                const flatIndex = flatStart + fileIndex;
+                                const isImage = result.blob.type.startsWith("image/");
+                                const ext = result.name.split(".").pop()?.toLowerCase() ?? "";
+                                return (
+                                  <div key={fileIndex} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg gap-3">
+                                    <div className="flex items-center gap-3 min-w-0 flex-1">
+                                      <div className="w-14 h-14 rounded-lg bg-[var(--background)] flex items-center justify-center overflow-hidden flex-shrink-0">
+                                        {isImage ? (
+                                          <img src={result.url} alt="" className="w-full h-full object-cover" />
+                                        ) : (
+                                          <FileFormatIcon extension={ext} size="md" />
+                                        )}
+                                      </div>
+                                      <div className="min-w-0">
+                                        <p className="text-sm text-[var(--foreground)] truncate" title={result.name}>{result.name}</p>
+                                        <p className="text-xs text-[var(--muted)]">{formatFileSize(result.blob.size)}</p>
+                                      </div>
+                                    </div>
+                                    <div className="flex gap-1 flex-shrink-0">
+                                      <button onClick={() => setResultPreviewIndex(flatIndex)} className="btn btn-icon-sm btn-ghost" title="Предпросмотр">
+                                        <Eye className="w-4 h-4" />
+                                      </button>
+                                      <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost" title="Скачать">
+                                        <Download className="w-4 h-4" />
+                                      </button>
+                                      <button onClick={() => deleteResult(result.url, flatIndex)} className="btn btn-icon-sm btn-ghost" title="Удалить">
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
                             </div>
                           </div>
-                          <div className="flex gap-1 flex-shrink-0">
-                            <button onClick={() => setResultPreviewIndex(index)} className="btn btn-icon-sm btn-ghost" title="Предпросмотр">
-                              <Eye className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost" title="Скачать">
-                              <Download className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => deleteResult(result.url, index)} className="btn btn-icon-sm btn-ghost" title="Удалить">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {conversionResults.map((result, index) => {
+                        const isImage = result.blob.type.startsWith("image/");
+                        const ext = result.name.split(".").pop()?.toLowerCase() ?? "";
+                        return (
+                          <div key={index} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg gap-3">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div className="w-14 h-14 rounded-lg bg-[var(--background)] flex items-center justify-center overflow-hidden flex-shrink-0">
+                                {isImage ? (
+                                  <img src={result.url} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <FileFormatIcon extension={ext} size="md" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm text-[var(--foreground)] truncate" title={result.name}>{result.name}</p>
+                                <p className="text-xs text-[var(--muted)]">{formatFileSize(result.blob.size)}</p>
+                              </div>
+                            </div>
+                            <div className="flex gap-1 flex-shrink-0">
+                              <button onClick={() => setResultPreviewIndex(index)} className="btn btn-icon-sm btn-ghost" title="Предпросмотр">
+                                <Eye className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost" title="Скачать">
+                                <Download className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => deleteResult(result.url, index)} className="btn btn-icon-sm btn-ghost" title="Удалить">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               )}
 
