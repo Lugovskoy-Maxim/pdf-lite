@@ -720,14 +720,17 @@ export function InstrumentPageClient({ tool }: Props) {
       const sections: { fileName: string; pages: { pageNum: number; text: string }[] }[] = [];
       for (let i = 0; i < total; i++) {
         const pdfFile = pdfFilesList[i];
-        if (total > 1) setConversionProgress({ current: i + 1, total, label: `Файл ${i + 1} из ${total}` });
+        const fileLabel = total > 1 ? `Файл ${i + 1} из ${total}. ` : "";
+        const onProgress = (cur: number, tot: number, msg: string) =>
+          setConversionProgress({ current: i + 1, total, label: fileLabel + msg });
+        if (total > 1) setConversionProgress({ current: i + 1, total, label: fileLabel + "Подготовка…" });
         let pages: { pageNum: number; text: string }[];
         if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
           const fd = new FormData(); fd.append("file", pdfFile);
           const res = await fetch("/api/pdf/extract-text", { method: "POST", body: fd });
           if (res.ok) { const data = (await res.json()) as { pages: { pageNum: number; text: string }[] }; pages = data.pages; }
-          else pages = await extractTextFromPDF(pdfFile);
-        } else pages = await extractTextFromPDF(pdfFile);
+          else pages = await extractTextFromPDF(pdfFile, { onProgress });
+        } else pages = await extractTextFromPDF(pdfFile, { onProgress });
         sections.push({ fileName: pdfFile.name, pages });
       }
       setConversionProgress(null);

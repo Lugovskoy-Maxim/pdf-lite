@@ -435,18 +435,140 @@ export async function splitPDFIntoPages(file: File): Promise<Blob[]> {
   return splitPDF(file, pageNumbers.map((n) => n + 1));
 }
 
-// Извлечение текста из PDF (pdf.js) — экспорт для инструмента «Извлечь текст»
-export async function extractTextFromPDF(file: File): Promise<{ pageNum: number; text: string }[]> {
+/** Минимум символов (без пробелов) со страницы, чтобы не считать её «только картинкой». Иначе используется OCR. */
+const EXTRACT_TEXT_OCR_THRESHOLD = 5;
+
+/** Опции извлечения текста: прогресс (текущая страница, всего страниц, подпись). */
+export type ExtractTextOptions = {
+  onProgress?: (current: number, total: number, message: string) => void;
+};
+
+/** Предобработка изображения для OCR: серый, контраст, бинаризация (снижает шум и артефакты). */
+function preprocessImageForOCR(canvas: HTMLCanvasElement): void {
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  const w = canvas.width;
+  const h = canvas.height;
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+  let min = 255;
+  let max = 0;
+  const grey: number[] = [];
+  for (let i = 0; i < data.length; i += 4) {
+    const g = Math.round(0.299 * data[i]! + 0.587 * data[i + 1]! + 0.114 * data[i + 2]!);
+    grey.push(g);
+    if (g < min) min = g;
+    if (g > max) max = g;
+  }
+  const span = max - min || 1;
+  // Растяжка контраста + пороговая бинаризация (Оцу-упрощённо: середина диапазона)
+  const threshold = min + span * 0.45;
+  for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+    const v = ((grey[j]! - min) / span) * 255;
+    const bin = v > threshold ? 255 : 0;
+    data[i] = data[i + 1] = data[i + 2] = bin;
+  }
+  ctx.putImageData(imageData, 0, 0);
+}
+
+/** Удаление артефактов и мусорных строк из результата OCR. */
+function cleanOcrText(raw: string): string {
+  const cyrillicOrLetter = /[\u0400-\u04FFa-zA-Zа-яёА-ЯЁ]/;
+  const digit = /[0-9]/;
+  const garbageLike = /[\\|=#*@©&<>^~`\[\]{}§€$¢£¥+]/;
+  const lines = raw.split(/\r?\n/);
+  const out: string[] = [];
+  for (const line of lines) {
+    const t = line.trim();
+    if (t.length < 2) continue;
+    let letters = 0;
+    let garbage = 0;
+    for (const c of t) {
+      if (cyrillicOrLetter.test(c) || digit.test(c)) letters++;
+      else if (garbageLike.test(c)) garbage++;
+    }
+    const total = t.length;
+    const letterRatio = letters / total;
+    const garbageRatio = garbage / total;
+    if (letterRatio >= 0.25 && garbageRatio <= 0.55) {
+      const cleaned = t.replace(/\s+/g, ' ').trim();
+      if (cleaned.length >= 2) out.push(cleaned);
+    }
+  }
+  return out.join('\n').replace(/(\n){3,}/g, '\n\n').trim();
+}
+
+/** Распознавание текста с изображения (OCR) через Tesseract.js. Только в браузере. */
+async function recognizeTextFromImage(imageSource: string | HTMLCanvasElement): Promise<string> {
+  const { createWorker, PSM } = await import('tesseract.js');
+  const worker = await createWorker('rus+eng', undefined, {
+    logger: () => {},
+  });
+  try {
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.AUTO,
+    });
+    const { data } = await worker.recognize(imageSource);
+    const raw = data.text ?? '';
+    return cleanOcrText(raw);
+  } finally {
+    await worker.terminate();
+  }
+}
+
+/** Рендер одной страницы PDF в canvas (для OCR). scale 2 улучшает качество распознавания. */
+async function renderPDFPageToCanvas(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  page: any,
+  scale = 2
+): Promise<HTMLCanvasElement> {
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas context not available');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({
+    canvasContext: ctx,
+    viewport,
+    canvas,
+  }).promise;
+  return canvas;
+}
+
+// Извлечение текста из PDF (pdf.js + OCR с картинок при отсутствии текстового слоя)
+export async function extractTextFromPDF(
+  file: File,
+  options?: ExtractTextOptions
+): Promise<{ pageNum: number; text: string }[]> {
   if (typeof window === 'undefined') throw new Error('Доступно только в браузере');
+  const onProgress = options?.onProgress;
   const pdfjsLib = await import('pdfjs-dist');
   setPdfWorkerSrc(pdfjsLib);
   const arrayBuffer = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
+  const total = pdf.numPages;
   const result: { pageNum: number; text: string }[] = [];
-  for (let i = 1; i <= pdf.numPages; i++) {
+
+  onProgress?.(0, total, 'Подготовка…');
+
+  for (let i = 1; i <= total; i++) {
+    onProgress?.(i, total, `Страница ${i} из ${total}`);
     const page = await pdf.getPage(i);
     const content = await page.getTextContent();
-    const text = content.items.map((item) => ('str' in item ? item.str : '')).join(' ');
+    let text = content.items.map((item) => ('str' in item ? item.str : '')).join(' ').trim();
+    const nonSpaceLength = text.replace(/\s/g, '').length;
+
+    if (nonSpaceLength < EXTRACT_TEXT_OCR_THRESHOLD) {
+      try {
+        onProgress?.(i, total, `OCR: страница ${i} из ${total}`);
+        const canvas = await renderPDFPageToCanvas(page);
+        preprocessImageForOCR(canvas);
+        text = (await recognizeTextFromImage(canvas)).trim();
+      } catch {
+        // OCR недоступен или ошибка — оставляем пустой или исходный текст
+      }
+    }
     result.push({ pageNum: i, text });
   }
   return result;

@@ -664,13 +664,14 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       return;
     }
     setIsLoading(true);
-    setStatusMessage({ type: "success", text: "Извлечение текста..." });
+    setStatusMessage({ type: "success", text: "Извлечение текста…" });
     try {
       const total = pdfFilesList.length;
       const sections: { fileName: string; pages: { pageNum: number; text: string }[] }[] = [];
       for (let i = 0; i < total; i++) {
         const pdfFile = pdfFilesList[i];
-        if (total > 1) setStatusMessage({ type: "success", text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
+        const fileLabel = total > 1 ? `Файл ${i + 1} из ${total}: ${pdfFile.name}. ` : "";
+        if (total > 1) setStatusMessage({ type: "success", text: `${fileLabel}Подготовка…` });
         let pages: { pageNum: number; text: string }[];
         if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
           const fd = new FormData();
@@ -680,10 +681,14 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
             const data = (await res.json()) as { pages: { pageNum: number; text: string }[] };
             pages = data.pages;
           } else {
-            pages = await extractTextFromPDF(pdfFile);
+            pages = await extractTextFromPDF(pdfFile, {
+              onProgress: (cur, tot, msg) => setStatusMessage({ type: "success", text: `${fileLabel}${msg}` }),
+            });
           }
         } else {
-          pages = await extractTextFromPDF(pdfFile);
+          pages = await extractTextFromPDF(pdfFile, {
+            onProgress: (cur, tot, msg) => setStatusMessage({ type: "success", text: `${fileLabel}${msg}` }),
+          });
         }
         sections.push({ fileName: pdfFile.name, pages });
       }
