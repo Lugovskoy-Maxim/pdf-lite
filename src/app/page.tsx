@@ -11,7 +11,8 @@ import { AdPlaceholder } from "../components/AdPlaceholder";
 import { SignaturePad, SIGNATURE_COLORS } from "../components/SignaturePad";
 import { SignaturePreview } from "../components/SignaturePreview";
 import { PDFEditPreview } from "../components/PDFEditPreview";
-import { PDFPageOrganizer, type OrganizerPageItem } from "../components/PDFPageOrganizer";
+import { PDFPageOrganizer, MAX_SERVER_FILE_SIZE, type OrganizerPageItem } from "../components/PDFPageOrganizer";
+import { FileFormatIcon } from "../components/FileFormatIcon";
 import { TOOLS, TOOL_CATEGORIES, getToolById } from "./tools-config";
 
 const TAB_IDS = ["pdfToImage", "imageToPdf", "imageConverter", "pdfToWord", "pdfToExcel", "organizePages", "merge", "split", "signature", "edit", "compress", "pdfToZip", "extractText"] as const;
@@ -21,6 +22,12 @@ const IMAGE_FORMAT_OPTIONS = [
   { value: "PNG", title: "PNG" },
   { value: "WebP", title: "WebP" },
 ] as const;
+
+/** Максимум файлов для пакетной обработки (конвертация по очереди) */
+const MAX_BATCH_FILES = 15;
+
+/** Инструменты с опцией «Обработка на сервере» (макс. 20 МБ) */
+const SERVER_CAPABLE_TABS = ["compress", "merge", "split", "extractText", "organizePages"] as const;
 
 type PDFToolsContentProps = {
   forcedTool?: string;
@@ -80,9 +87,10 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
   const [signaturePreviewPage, setSignaturePreviewPage] = useState(1);
   const [organizerPages, setOrganizerPages] = useState<OrganizerPageItem[]>([]);
+  const [processOnServer, setProcessOnServer] = useState(true);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
-  const [extractedText, setExtractedText] = useState<{ pageNum: number; text: string }[] | null>(null);
+  const [extractedText, setExtractedText] = useState<{ fileName: string; pages: { pageNum: number; text: string }[] }[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
   const [previewUrls, setPreviewUrls] = useState<(string | null)[]>([]);
@@ -102,7 +110,23 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   );
   const hasOnlyImages = fileList.length > 0 && imageFiles.length === fileList.length;
   const hasAtLeastTwoPdfFiles = fileList.filter((f) => f.type === "application/pdf").length >= 2;
-  const allowMultipleSelection = activeTab === "merge" || activeTab === "imageToPdf" || activeTab === "imageConverter";
+  const pdfFilesList = useMemo(
+    () => fileList.filter((f) => f.type === "application/pdf").slice(0, MAX_BATCH_FILES),
+    [fileList]
+  );
+  const hasAtLeastOnePdf = pdfFilesList.length >= 1;
+  const showServerOption = SERVER_CAPABLE_TABS.includes(activeTab as (typeof SERVER_CAPABLE_TABS)[number]) && (activeTab === "merge" ? hasAtLeastTwoPdfFiles : hasAtLeastOnePdf);
+  const mergeTotalSize = useMemo(() => {
+    if (activeTab !== "merge" || !files) return 0;
+    return Array.from(files).filter((f) => f.type === "application/pdf").reduce((s, f) => s + f.size, 0);
+  }, [activeTab, files]);
+  const serverFileTooBig = showServerOption && (activeTab === "merge" ? mergeTotalSize > MAX_SERVER_FILE_SIZE : ((selectedPdfFile ?? pdfFilesList[0])?.size ?? 0) > MAX_SERVER_FILE_SIZE);
+  const batchToolTabs = ["pdfToImage", "pdfToWord", "pdfToExcel", "pdfToZip", "extractText", "compress"] as const;
+  const allowMultipleSelection =
+    activeTab === "merge" ||
+    activeTab === "imageToPdf" ||
+    activeTab === "imageConverter" ||
+    batchToolTabs.includes(activeTab as (typeof batchToolTabs)[number]);
   const inputAccept = useMemo(() => {
     if (activeTab === "imageToPdf" || activeTab === "imageConverter") return ".jpg,.jpeg,.png,.webp";
     if (activeTab === "merge") return ".pdf";
@@ -344,49 +368,107 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   };
 
   const handleConvert = async () => {
-    if (!selectedPdfFile) {
-      showStatus('error', 'Пожалуйста, выберите PDF файл для конвертации');
+    if (pdfFilesList.length === 0) {
+      showStatus('error', 'Пожалуйста, выберите PDF файл(ы) для конвертации');
       return;
     }
     if (!convertFormat) {
       showStatus('error', 'Пожалуйста, выберите формат для конвертации');
       return;
     }
+    const ext = convertFormat.toLowerCase();
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Конвертация...' });
     try {
-      const images = await convertPDFToImages(selectedPdfFile, convertFormat);
-      const results = images.map((blob, index) => ({
-        blob,
-        url: URL.createObjectURL(blob),
-        name: `page-${index + 1}.${convertFormat.toLowerCase()}`
-      }));
-      replaceConversionResults(results);
-      showStatus('success', `Конвертация завершена! ${images.length} страниц(а) обработано`, 5000);
+      const allResults: { blob: Blob; url: string; name: string }[] = [];
+      const total = pdfFilesList.length;
+      for (let fIdx = 0; fIdx < total; fIdx++) {
+        const pdfFile = pdfFilesList[fIdx];
+        const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+        setStatusMessage({
+          type: 'success',
+          text: total > 1 ? `Файл ${fIdx + 1} из ${total}: ${pdfFile.name}` : 'Конвертация...',
+        });
+        const images = await convertPDFToImages(pdfFile, convertFormat, (current, tot, label) => {
+          if (total > 1) setStatusMessage({ type: 'success', text: `Файл ${fIdx + 1}/${total}. ${label ?? ""}` });
+        });
+        for (let i = 0; i < images.length; i++) {
+          const name = total > 1 ? `${baseName}-стр${i + 1}.${ext}` : `page-${i + 1}.${ext}`;
+          allResults.push({
+            blob: images[i],
+            url: URL.createObjectURL(images[i]),
+            name,
+          });
+        }
+      }
+      replaceConversionResults(allResults);
+      const totalPages = allResults.length;
+      showStatus('success', total > 1 ? `Готово: ${total} файлов, ${totalPages} изображений` : `Конвертация завершена! ${totalPages} страниц(а)`, 5000);
     } catch (error) {
-      showStatus('error', 'Ошибка при конвертации файла: ' + (error as Error).message);
+      showStatus('error', 'Ошибка при конвертации: ' + (error as Error).message);
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleCompress = async () => {
-    if (!selectedPdfFile) {
-      showStatus('error', 'Пожалуйста, выберите PDF файл для сжатия');
+    if (pdfFilesList.length === 0) {
+      showStatus('error', 'Пожалуйста, выберите PDF файл(ы) для сжатия');
       return;
     }
     setIsLoading(true);
-    setStatusMessage({ type: 'success', text: 'Сжатие файла...' });
     clearCompressResult();
     try {
-      const compressedFile = await compressPDF(selectedPdfFile, compressionLevel);
-      const url = URL.createObjectURL(compressedFile);
-      const originalSize = selectedPdfFile.size;
-      const compressedSize = compressedFile.size;
-      replaceCompressResult({ blob: compressedFile, url, originalSize, compressedSize });
-      showStatus('success', `Сжатие завершено!`, 10000);
+      if (pdfFilesList.length === 1) {
+        const pdfFile = pdfFilesList[0];
+        setStatusMessage({ type: 'success', text: 'Сжатие файла...' });
+        let compressedFile: Blob;
+        if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
+          const fd = new FormData();
+          fd.append("file", pdfFile);
+          fd.append("compressionLevel", compressionLevel);
+          const res = await fetch("/api/pdf/compress", { method: "POST", body: fd });
+          if (res.ok) compressedFile = await res.blob();
+          else compressedFile = await compressPDF(pdfFile, compressionLevel);
+        } else {
+          compressedFile = await compressPDF(pdfFile, compressionLevel);
+        }
+        const url = URL.createObjectURL(compressedFile);
+        replaceCompressResult({
+          blob: compressedFile,
+          url,
+          originalSize: pdfFile.size,
+          compressedSize: compressedFile.size,
+        });
+        showStatus('success', 'Сжатие завершено!', 10000);
+      } else {
+        const results: { blob: Blob; url: string; name: string }[] = [];
+        const total = pdfFilesList.length;
+        for (let i = 0; i < total; i++) {
+          const pdfFile = pdfFilesList[i];
+          setStatusMessage({ type: 'success', text: `Сжатие файла ${i + 1} из ${total}...` });
+          let compressedFile: Blob;
+          if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
+            const fd = new FormData();
+            fd.append("file", pdfFile);
+            fd.append("compressionLevel", compressionLevel);
+            const res = await fetch("/api/pdf/compress", { method: "POST", body: fd });
+            compressedFile = res.ok ? await res.blob() : await compressPDF(pdfFile, compressionLevel);
+          } else {
+            compressedFile = await compressPDF(pdfFile, compressionLevel);
+          }
+          const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+          results.push({
+            blob: compressedFile,
+            url: URL.createObjectURL(compressedFile),
+            name: `compressed-${baseName}.pdf`,
+          });
+        }
+        replaceConversionResults(results);
+        showStatus('success', `Сжато файлов: ${total}`, 10000);
+      }
     } catch (error) {
-      showStatus('error', 'Ошибка при сжатии файла: ' + (error as Error).message);
+      showStatus('error', 'Ошибка при сжатии: ' + (error as Error).message);
     } finally {
       setIsLoading(false);
     }
@@ -402,10 +484,20 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
       showStatus('error', 'Для объединения нужны минимум 2 PDF файла');
       return;
     }
+    const totalSize = pdfFiles.reduce((s, f) => s + f.size, 0);
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Объединение PDF...' });
     try {
-      const mergedBlob = await mergePDFs(pdfFiles);
+      let mergedBlob: Blob;
+      if (processOnServer && totalSize <= MAX_SERVER_FILE_SIZE) {
+        const fd = new FormData();
+        pdfFiles.forEach((f, i) => fd.append(`file${i}`, f));
+        const res = await fetch("/api/pdf/merge", { method: "POST", body: fd });
+        if (res.ok) mergedBlob = await res.blob();
+        else mergedBlob = await mergePDFs(pdfFiles);
+      } else {
+        mergedBlob = await mergePDFs(pdfFiles);
+      }
       const url = URL.createObjectURL(mergedBlob);
       setConversionResults([{ blob: mergedBlob, url, name: `merged-${pdfFiles.length}-files.pdf` }]);
       showStatus('success', `Объединено ${pdfFiles.length} PDF файлов`, 5000);
@@ -425,16 +517,40 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
     setStatusMessage({ type: 'success', text: 'Разделение PDF...' });
     try {
       let pdfBlobs: Blob[];
-      if (splitMode === 'all') {
-        pdfBlobs = await splitPDFIntoPages(selectedPdfFile);
-      } else {
-        const parts = parsePageSelection(splitRange, pdfPageCount || undefined);
-        if (parts.length === 0) {
-          showStatus('error', 'Укажите номера страниц (например: 1,3,5 или 1-5)');
-          setIsLoading(false);
-          return;
+      if (processOnServer && selectedPdfFile.size <= MAX_SERVER_FILE_SIZE) {
+        const fd = new FormData();
+        fd.append("file", selectedPdfFile);
+        fd.append("mode", splitMode);
+        if (splitMode === "range") fd.append("range", splitRange);
+        const res = await fetch("/api/pdf/split", { method: "POST", body: fd });
+        if (res.ok) {
+          const json = (await res.json()) as { files: string[] };
+          pdfBlobs = json.files.map((b64) => {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new Blob([bytes], { type: "application/pdf" });
+          });
+        } else {
+          if (splitMode === 'all') pdfBlobs = await splitPDFIntoPages(selectedPdfFile);
+          else {
+            const parts = parsePageSelection(splitRange, pdfPageCount || undefined);
+            if (parts.length === 0) { showStatus('error', 'Укажите номера страниц (например: 1,3,5 или 1-5)'); setIsLoading(false); return; }
+            pdfBlobs = await splitPDF(selectedPdfFile, parts);
+          }
         }
-        pdfBlobs = await splitPDF(selectedPdfFile, parts);
+      } else {
+        if (splitMode === 'all') {
+          pdfBlobs = await splitPDFIntoPages(selectedPdfFile);
+        } else {
+          const parts = parsePageSelection(splitRange, pdfPageCount || undefined);
+          if (parts.length === 0) {
+            showStatus('error', 'Укажите номера страниц (например: 1,3,5 или 1-5)');
+            setIsLoading(false);
+            return;
+          }
+          pdfBlobs = await splitPDF(selectedPdfFile, parts);
+        }
       }
       const results = pdfBlobs.map((blob, i) => ({
         blob,
@@ -451,17 +567,24 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   };
 
   const handlePDFToWord = async () => {
-    if (!selectedPdfFile) {
-      showStatus('error', 'Выберите PDF файл');
+    if (pdfFilesList.length === 0) {
+      showStatus('error', 'Выберите PDF файл(ы)');
       return;
     }
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Конвертация в Word...' });
     try {
-      const blob = await convertPDFToWord(selectedPdfFile);
-      const url = URL.createObjectURL(blob);
-      replaceConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.docx') }]);
-      showStatus('success', 'Конвертация в Word завершена', 5000);
+      const results: { blob: Blob; url: string; name: string }[] = [];
+      const total = pdfFilesList.length;
+      for (let i = 0; i < total; i++) {
+        const pdfFile = pdfFilesList[i];
+        if (total > 1) setStatusMessage({ type: 'success', text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
+        const blob = await convertPDFToWord(pdfFile);
+        const baseName = pdfFile.name.replace(/\.pdf$/i, '');
+        results.push({ blob, url: URL.createObjectURL(blob), name: `${baseName}.docx` });
+      }
+      replaceConversionResults(results);
+      showStatus('success', total > 1 ? `Готово: ${total} файлов в Word` : 'Конвертация в Word завершена', 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
@@ -470,17 +593,24 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   };
 
   const handlePDFToExcel = async () => {
-    if (!selectedPdfFile) {
-      showStatus('error', 'Выберите PDF файл');
+    if (pdfFilesList.length === 0) {
+      showStatus('error', 'Выберите PDF файл(ы)');
       return;
     }
     setIsLoading(true);
     setStatusMessage({ type: 'success', text: 'Конвертация в Excel...' });
     try {
-      const blob = await convertPDFToExcel(selectedPdfFile);
-      const url = URL.createObjectURL(blob);
-      replaceConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.xlsx') }]);
-      showStatus('success', 'Конвертация в Excel завершена', 5000);
+      const results: { blob: Blob; url: string; name: string }[] = [];
+      const total = pdfFilesList.length;
+      for (let i = 0; i < total; i++) {
+        const pdfFile = pdfFilesList[i];
+        if (total > 1) setStatusMessage({ type: 'success', text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
+        const blob = await convertPDFToExcel(pdfFile);
+        const baseName = pdfFile.name.replace(/\.pdf$/i, '');
+        results.push({ blob, url: URL.createObjectURL(blob), name: `${baseName}.xlsx` });
+      }
+      replaceConversionResults(results);
+      showStatus('success', total > 1 ? `Готово: ${total} файлов в Excel` : 'Конвертация в Excel завершена', 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
@@ -489,29 +619,49 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   };
 
   const handlePdfToZip = async () => {
-    if (!selectedPdfFile) {
-      showStatus("error", "Выберите PDF файл");
+    if (pdfFilesList.length === 0) {
+      showStatus("error", "Выберите PDF файл(ы)");
       return;
     }
     const format = convertFormat || "PNG";
+    const ext = format.toLowerCase();
     setIsLoading(true);
-    setStatusMessage({ type: "success", text: "Создание архива..." });
+    setStatusMessage({ type: "success", text: "Создание архива(ов)..." });
     try {
-      const images = await convertPDFToImages(selectedPdfFile, format);
-      const items = images.map((blob, i) => ({
-        blob,
-        name: `page-${i + 1}.${format.toLowerCase()}`,
-      }));
-      const zipBlob = await createZipFromImages(items);
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${fileName.replace(/\.pdf$/i, "")}-pages.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      showStatus("success", `Архив со ${images.length} страниц(ой) скачан`, 5000);
+      if (pdfFilesList.length === 1) {
+        const pdfFile = pdfFilesList[0];
+        const images = await convertPDFToImages(pdfFile, format);
+        const items = images.map((blob, i) => ({ blob, name: `page-${i + 1}.${ext}` }));
+        const zipBlob = await createZipFromImages(items);
+        const url = URL.createObjectURL(zipBlob);
+        const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${baseName}-pages.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showStatus("success", `Архив со ${images.length} страниц(ой) скачан`, 5000);
+      } else {
+        const results: { blob: Blob; url: string; name: string }[] = [];
+        const total = pdfFilesList.length;
+        for (let i = 0; i < total; i++) {
+          const pdfFile = pdfFilesList[i];
+          setStatusMessage({ type: "success", text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
+          const images = await convertPDFToImages(pdfFile, format);
+          const items = images.map((blob, p) => ({ blob, name: `page-${p + 1}.${ext}` }));
+          const zipBlob = await createZipFromImages(items);
+          const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+          results.push({
+            blob: zipBlob,
+            url: URL.createObjectURL(zipBlob),
+            name: `${baseName}-pages.zip`,
+          });
+        }
+        replaceConversionResults(results);
+        showStatus("success", `Готово: ${total} архивов`, 5000);
+      }
     } catch (error) {
       showStatus("error", "Ошибка: " + (error as Error).message);
     } finally {
@@ -520,16 +670,36 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
   };
 
   const handleExtractText = async () => {
-    if (!selectedPdfFile) {
-      showStatus("error", "Выберите PDF файл");
+    if (pdfFilesList.length === 0) {
+      showStatus("error", "Выберите PDF файл(ы)");
       return;
     }
     setIsLoading(true);
     setStatusMessage({ type: "success", text: "Извлечение текста..." });
     try {
-      const pages = await extractTextFromPDF(selectedPdfFile);
-      setExtractedText(pages);
-      showStatus("success", "Текст извлечён", 5000);
+      const total = pdfFilesList.length;
+      const sections: { fileName: string; pages: { pageNum: number; text: string }[] }[] = [];
+      for (let i = 0; i < total; i++) {
+        const pdfFile = pdfFilesList[i];
+        if (total > 1) setStatusMessage({ type: "success", text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
+        let pages: { pageNum: number; text: string }[];
+        if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
+          const fd = new FormData();
+          fd.append("file", pdfFile);
+          const res = await fetch("/api/pdf/extract-text", { method: "POST", body: fd });
+          if (res.ok) {
+            const data = (await res.json()) as { pages: { pageNum: number; text: string }[] };
+            pages = data.pages;
+          } else {
+            pages = await extractTextFromPDF(pdfFile);
+          }
+        } else {
+          pages = await extractTextFromPDF(pdfFile);
+        }
+        sections.push({ fileName: pdfFile.name, pages });
+      }
+      setExtractedText(sections);
+      showStatus("success", total > 1 ? `Текст извлечён из ${total} файлов` : "Текст извлечён", 5000);
     } catch (error) {
       showStatus("error", "Ошибка: " + (error as Error).message);
     } finally {
@@ -996,33 +1166,59 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-sm text-[var(--muted)]">
                       Файлов: {fileList.length}
+                      {batchToolTabs.includes(activeTab as (typeof batchToolTabs)[number]) &&
+                        pdfFilesList.length > 0 &&
+                        (pdfFilesList.length < fileList.filter((f) => f.type === "application/pdf").length ? (
+                          <span className="ml-1">(обработаем первые {pdfFilesList.length})</span>
+                        ) : pdfFilesList.length > 1 ? (
+                          <span className="ml-1">— по очереди, макс. {MAX_BATCH_FILES}</span>
+                        ) : null)}
                     </span>
                     <button onClick={handleClearFile} className="btn btn-ghost btn-sm">
                       <X className="w-4 h-4" />
                       Очистить
                     </button>
                   </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
                     {fileList.map((f, index) => {
-                      const isPdf = f.type.startsWith("application/pdf");
                       const previewUrl = previewUrls[index] ?? null;
                       return (
-                        <div key={`${f.name}-${index}`} className="card p-3">
-                          <div className="aspect-square bg-[var(--surface)] rounded flex items-center justify-center mb-2">
+                        <div key={`${f.name}-${index}`} className="card p-2 min-w-0">
+                          <div className="h-14 bg-[var(--surface)] rounded flex items-center justify-center mb-1.5 overflow-hidden">
                             {previewUrl ? (
-                              <img src={previewUrl} alt="" className="w-full h-full object-cover rounded" />
-                            ) : isPdf ? (
-                              <FileText className="w-8 h-8 text-[var(--muted)]" />
+                              <img src={previewUrl} alt="" className="w-full h-full object-cover" />
                             ) : (
-                              <Image className="w-8 h-8 text-[var(--muted)]" />
+                              <FileFormatIcon file={f} size="md" />
                             )}
                           </div>
-                          <p className="text-xs text-[var(--foreground)] truncate">{f.name}</p>
-                          <p className="text-xs text-[var(--muted)]">{formatFileSize(f.size)}</p>
+                          <p className="text-[10px] sm:text-xs text-[var(--foreground)] truncate" title={f.name}>{f.name}</p>
+                          <p className="text-[10px] sm:text-xs text-[var(--muted)]">{formatFileSize(f.size)}</p>
                         </div>
                       );
                     })}
                   </div>
+                </div>
+              )}
+
+              {/* Обработка на сервере (до 20 МБ) — standalone */}
+              {showServerOption && (
+                <div className="mb-6">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={processOnServer}
+                      onChange={(e) => setProcessOnServer(e.target.checked)}
+                      className="rounded border-[var(--border)]"
+                    />
+                    <span className="text-sm text-[var(--foreground)]">
+                      Обработка на сервере (макс. 20 МБ)
+                    </span>
+                  </label>
+                  {serverFileTooBig && (
+                    <p className="text-xs text-[var(--muted)] mt-1">
+                      {activeTab === "merge" ? "Суммарный размер файлов больше 20 МБ — объединение в браузере." : "Файл больше 20 МБ — обработка в браузере."}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -1044,6 +1240,7 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                     pdfFile={selectedPdfFile}
                     pageCount={pdfPageCount}
                     onChange={setOrganizerPages}
+                    useServerPreviews={processOnServer}
                   />
                 </div>
               )}
@@ -1085,8 +1282,9 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                       <button
                         key={format.value}
                         onClick={() => setConvertFormat(format.value)}
-                        className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                        className={`btn btn-sm inline-flex items-center gap-1.5 ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
                       >
+                        <FileFormatIcon extension={format.value.toLowerCase()} size="sm" />
                         {format.title}
                       </button>
                     ))}
@@ -1100,8 +1298,9 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                       <button
                         key={format.value}
                         onClick={() => setConvertFormat(format.value)}
-                        className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                        className={`btn btn-sm inline-flex items-center gap-1.5 ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
                       >
+                        <FileFormatIcon extension={format.value.toLowerCase()} size="sm" />
                         {format.title}
                       </button>
                     ))}
@@ -1115,8 +1314,9 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                       <button
                         key={format.value}
                         onClick={() => setConvertFormat(format.value)}
-                        className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                        className={`btn btn-sm inline-flex items-center gap-1.5 ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
                       >
+                        <FileFormatIcon extension={format.value.toLowerCase()} size="sm" />
                         {format.title}
                       </button>
                     ))}
@@ -1124,23 +1324,28 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                 )}
 
                 {/* Compress */}
-                {activeTab === "compress" && (
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      { level: "low", name: "Низкое" },
-                      { level: "medium", name: "Среднее" },
-                      { level: "high", name: "Высокое" },
-                    ].map((c) => (
-                      <button
-                        key={c.level}
-                        onClick={() => setCompressionLevel(c.level)}
-                        className={`btn btn-sm ${compressionLevel === c.level ? "btn-primary" : "btn-secondary"}`}
-                      >
-                        {c.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                  {activeTab === "compress" && (
+                    <>
+                      <div className="flex flex-wrap gap-2">
+                        {[
+                          { level: "low", name: "Низкое" },
+                          { level: "medium", name: "Среднее" },
+                          { level: "high", name: "Высокое" },
+                        ].map((c) => (
+                          <button
+                            key={c.level}
+                            onClick={() => setCompressionLevel(c.level)}
+                            className={`btn btn-sm ${compressionLevel === c.level ? "btn-primary" : "btn-secondary"}`}
+                          >
+                            {c.name}
+                          </button>
+                        ))}
+                      </div>
+                      {pdfFilesList.length > 1 && (
+                        <p className="text-xs text-[var(--muted)]">Будет обработано файлов: {pdfFilesList.length} (по очереди)</p>
+                      )}
+                    </>
+                  )}
 
                 {/* Split */}
                 {activeTab === "split" && (
@@ -1261,11 +1466,33 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                   </div>
                 )}
 
+                {/* Обработка на сервере (до 20 МБ) — для всех подходящих инструментов */}
+                {showServerOption && (
+                  <div className="mb-4">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={processOnServer}
+                        onChange={(e) => setProcessOnServer(e.target.checked)}
+                        className="rounded border-[var(--border)]"
+                      />
+                      <span className="text-sm text-[var(--foreground)]">
+                        Обработка на сервере (макс. 20 МБ)
+                      </span>
+                    </label>
+                    {serverFileTooBig && (
+                      <p className="text-xs text-[var(--muted)] mt-1">
+                        {activeTab === "merge" ? "Суммарный размер файлов больше 20 МБ — объединение в браузере." : "Файл больше 20 МБ — обработка в браузере."}
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* Action Buttons */}
                 <div className="pt-4">
                   {activeTab === "pdfToImage" && (
-                    <button onClick={handleConvert} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                      {isLoading ? "Обработка..." : `Конвертировать в ${convertFormat || "формат"}`}
+                    <button onClick={handleConvert} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                      {isLoading ? "Обработка..." : pdfFilesList.length > 1 ? `Конвертировать ${pdfFilesList.length} файлов` : `Конвертировать в ${convertFormat || "формат"}`}
                     </button>
                   )}
                   {activeTab === "imageToPdf" && (
@@ -1279,23 +1506,23 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                     </button>
                   )}
                   {activeTab === "pdfToWord" && (
-                    <button onClick={handlePDFToWord} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                      {isLoading ? "Конвертация..." : "Сохранить как Word"}
+                    <button onClick={handlePDFToWord} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                      {isLoading ? "Конвертация..." : pdfFilesList.length > 1 ? `В Word (${pdfFilesList.length} файлов)` : "Сохранить как Word"}
                     </button>
                   )}
                   {activeTab === "pdfToExcel" && (
-                    <button onClick={handlePDFToExcel} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                      {isLoading ? "Конвертация..." : "Сохранить как Excel"}
+                    <button onClick={handlePDFToExcel} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                      {isLoading ? "Конвертация..." : pdfFilesList.length > 1 ? `В Excel (${pdfFilesList.length} файлов)` : "Сохранить как Excel"}
                     </button>
                   )}
                   {activeTab === "pdfToZip" && (
-                    <button onClick={handlePdfToZip} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                      {isLoading ? "Создание архива..." : "Скачать как ZIP"}
+                    <button onClick={handlePdfToZip} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                      {isLoading ? "Создание архива..." : pdfFilesList.length > 1 ? `Скачать ${pdfFilesList.length} ZIP` : "Скачать как ZIP"}
                     </button>
                   )}
                   {activeTab === "extractText" && (
-                    <button onClick={handleExtractText} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                      {isLoading ? "Извлечение..." : "Извлечь текст"}
+                    <button onClick={handleExtractText} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                      {isLoading ? "Извлечение..." : pdfFilesList.length > 1 ? `Извлечь из ${pdfFilesList.length} файлов` : "Извлечь текст"}
                     </button>
                   )}
                   {activeTab === "merge" && (
@@ -1309,8 +1536,8 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                     </button>
                   )}
                   {activeTab === "compress" && (
-                    <button onClick={handleCompress} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                      {isLoading ? "Сжатие..." : "Сжать PDF"}
+                    <button onClick={handleCompress} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                      {isLoading ? "Сжатие..." : pdfFilesList.length > 1 ? `Сжать ${pdfFilesList.length} файлов` : "Сжать PDF"}
                     </button>
                   )}
                   {activeTab === "signature" && (
@@ -1350,27 +1577,35 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                     </button>
                   </div>
                   <div className="space-y-2">
-                    {conversionResults.map((result, index) => (
-                      <div key={index} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 bg-[var(--background)] rounded flex items-center justify-center text-xs font-medium text-[var(--muted)]">
-                            {result.name.split('.').pop()?.toUpperCase()}
+                    {conversionResults.map((result, index) => {
+                      const isImage = result.blob.type.startsWith("image/");
+                      const ext = result.name.split(".").pop()?.toLowerCase() ?? "";
+                      return (
+                        <div key={index} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg gap-3">
+                          <div className="flex items-center gap-3 min-w-0 flex-1">
+                            <div className="w-14 h-14 rounded-lg bg-[var(--background)] flex items-center justify-center overflow-hidden flex-shrink-0">
+                              {isImage ? (
+                                <img src={result.url} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <FileFormatIcon extension={ext} size="md" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="text-sm text-[var(--foreground)] truncate" title={result.name}>{result.name}</p>
+                              <p className="text-xs text-[var(--muted)]">{formatFileSize(result.blob.size)}</p>
+                            </div>
                           </div>
-                          <div>
-                            <p className="text-sm text-[var(--foreground)]">{result.name}</p>
-                            <p className="text-xs text-[var(--muted)]">{(result.blob.size / 1024).toFixed(1)} KB</p>
+                          <div className="flex gap-1 flex-shrink-0">
+                            <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost" title="Скачать">
+                              <Download className="w-4 h-4" />
+                            </button>
+                            <button onClick={() => deleteResult(result.url, index)} className="btn btn-icon-sm btn-ghost" title="Удалить">
+                              <Trash2 className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
-                        <div className="flex gap-1">
-                          <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost">
-                            <Download className="w-4 h-4" />
-                          </button>
-                          <button onClick={() => deleteResult(result.url, index)} className="btn btn-icon-sm btn-ghost">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -1382,7 +1617,14 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                     <h3 className="font-medium text-[var(--foreground)]">Извлечённый текст</h3>
                     <button
                       onClick={() => {
-                        const full = extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n");
+                        const full = extractedText
+                          .map((section) =>
+                            [
+                              `=== ${section.fileName} ===`,
+                              ...section.pages.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`),
+                            ].join("\n\n")
+                          )
+                          .join("\n\n\n");
                         void navigator.clipboard.writeText(full);
                         showStatus("success", "Текст скопирован", 3000);
                       }}
@@ -1394,7 +1636,14 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
                   <textarea
                     readOnly
                     className="w-full h-48 p-3 text-sm font-mono bg-[var(--surface)] rounded-lg resize-none"
-                    value={extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n")}
+                    value={extractedText
+                      .map((section) =>
+                        [
+                          `=== ${section.fileName} ===`,
+                          ...section.pages.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`),
+                        ].join("\n\n")
+                      )
+                      .join("\n\n\n")}
                   />
                 </div>
               )}

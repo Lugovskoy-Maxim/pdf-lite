@@ -4,7 +4,7 @@ import { writeFile, unlink } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 
-const MAX_PDF_SIZE = 50 * 1024 * 1024; // 50 MB
+const MAX_PDF_SIZE = 20 * 1024 * 1024; // 20 MB — лимит для серверной обработки
 const MAX_PAGES = 500;
 
 /**
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     }
     if (file.size > MAX_PDF_SIZE) {
       return NextResponse.json(
-        { error: "Файл слишком большой (макс. 50 МБ)" },
+        { error: "Файл слишком большой (макс. 20 МБ)" },
         { status: 400 }
       );
     }

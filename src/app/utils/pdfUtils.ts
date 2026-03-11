@@ -123,8 +123,14 @@ async function compressPDFWithImages(file: File, settings: { quality: number; ma
   return new Blob([new Uint8Array(compressedPdfBytes)], { type: 'application/pdf' });
 }
 
+export type ConversionProgressCallback = (current: number, total: number, label?: string) => void;
+
 // Функция для конвертации PDF в изображения с использованием pdf.js
-export async function convertPDFToImages(file: File, format: string): Promise<Blob[]> {
+export async function convertPDFToImages(
+  file: File,
+  format: string,
+  onProgress?: ConversionProgressCallback
+): Promise<Blob[]> {
   const images: Blob[] = [];
   
   // Проверяем, что мы на клиенте (не на сервере)
@@ -138,9 +144,11 @@ export async function convertPDFToImages(file: File, format: string): Promise<Bl
     setPdfWorkerSrc(pdfjsLib);
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
+    const total = pdf.numPages;
     
     // Обрабатываем каждую страницу
-    for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+    for (let pageNum = 1; pageNum <= total; pageNum++) {
+      onProgress?.(pageNum, total, `Страница ${pageNum} из ${total}`);
       const page = await pdf.getPage(pageNum);
       const viewport = page.getViewport({ scale: 2 }); // Масштаб 2 для лучшего качества
       
@@ -179,6 +187,7 @@ export async function convertPDFToImages(file: File, format: string): Promise<Bl
         images.push(blob);
       }
     }
+    onProgress?.(total, total, "Готово");
   } catch (error) {
     console.error('Ошибка при конвертации PDF в изображения:', error);
     throw error;
@@ -217,7 +226,8 @@ export function getImageMimeAndExtension(format: string): { mime: string; ext: s
 // Конвертация изображений между JPG / PNG / WebP через canvas.
 export async function convertImagesBetweenFormats(
   files: File[],
-  outputFormat: "JPG" | "PNG" | "WebP" | string
+  outputFormat: "JPG" | "PNG" | "WebP" | string,
+  onProgress?: ConversionProgressCallback
 ): Promise<{ blob: Blob; name: string }[]> {
   if (typeof window === "undefined") {
     throw new Error("Конвертация изображений доступна только в браузере");
@@ -225,9 +235,14 @@ export async function convertImagesBetweenFormats(
 
   const { mime, ext, quality } = getImageMimeAndExtension(outputFormat);
   const results: { blob: Blob; name: string }[] = [];
+  const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+  const total = imageFiles.length;
+  let current = 0;
 
   for (const file of files) {
     if (!file.type.startsWith("image/")) continue;
+    current += 1;
+    onProgress?.(current, total, `Файл ${current} из ${total}: ${file.name}`);
     const bitmap = await createImageBitmap(file);
     const canvas = document.createElement("canvas");
     canvas.width = bitmap.width;
@@ -251,6 +266,7 @@ export async function convertImagesBetweenFormats(
       name: `${baseName}.${ext}`,
     });
   }
+  onProgress?.(total, total, "Готово");
 
   return results;
 }
@@ -271,54 +287,72 @@ async function convertWebPToPng(arrayBuffer: ArrayBuffer): Promise<Blob> {
   });
 }
 
-// Функция для конвертации изображений в PDF
-export async function convertImagesToPDF(files: File[]): Promise<Blob> {
-  const newPdfDoc = await PDFDocument.create();
-  
-  for (const file of files) {
-    if (!file.type.startsWith('image/')) {
-      continue; // Пропускаем не изображения
-    }
-    
-    const arrayBuffer = await file.arrayBuffer();
-    
-    let image;
-    try {
-      // Пытаемся встроить как JPEG
-      image = await newPdfDoc.embedJpg(arrayBuffer);
-    } catch {
-      try {
-        // Если не удалось, пробуем как PNG
-        image = await newPdfDoc.embedPng(arrayBuffer);
-      } catch {
-        try {
-          // Поддержка WebP через canvas (браузер)
-          if (typeof window !== 'undefined' && file.type === 'image/webp') {
-            const pngBlob = await convertWebPToPng(arrayBuffer);
-            image = await newPdfDoc.embedPng(await pngBlob.arrayBuffer());
-          } else {
-            throw new Error('Unsupported format');
-          }
-        } catch {
-          console.warn(`Не удалось обработать изображение: ${file.name}. Формат не поддерживается или файл поврежден.`);
-          continue;
-        }
-      }
-    }
-    
-    // Создаем новую страницу с размерами, соответствующими изображению
-    const page = newPdfDoc.addPage([image.width, image.height]);
-    
-    // Добавляем изображение на всю страницу
-    page.drawImage(image, {
-      x: 0,
-      y: 0,
-      width: image.width,
-      height: image.height,
-    });
+/** Максимальная сторона изображения при вставке в PDF (уменьшает размер файла). */
+const MAX_IMAGE_DIMENSION = 1600;
+/** Качество JPEG при конвертации изображений в PDF (0–1). */
+const PDF_IMAGE_JPEG_QUALITY = 0.85;
+
+/**
+ * Преобразует любое изображение (JPG, PNG, WebP) в JPEG с ограничением размера и заданным качеством.
+ * Вызывать только в браузере.
+ */
+async function imageToPdfJpeg(file: File): Promise<ArrayBuffer> {
+  const bitmap = await createImageBitmap(file);
+  let w = bitmap.width;
+  let h = bitmap.height;
+  if (w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION) {
+    const scale = Math.min(MAX_IMAGE_DIMENSION / w, MAX_IMAGE_DIMENSION / h);
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
   }
-  
-  const pdfBytes = await newPdfDoc.save();
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    bitmap.close();
+    throw new Error('Canvas context not available');
+  }
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, 'image/jpeg', PDF_IMAGE_JPEG_QUALITY);
+  });
+  if (!blob) throw new Error('Failed to encode JPEG');
+  return blob.arrayBuffer();
+}
+
+// Функция для конвертации изображений в PDF (все картинки приводятся к JPEG с ограничением размера — меньше итоговый PDF)
+export async function convertImagesToPDF(files: File[], onProgress?: ConversionProgressCallback): Promise<Blob> {
+  if (typeof window === 'undefined') {
+    throw new Error('Создание PDF из изображений доступно только в браузере');
+  }
+  const newPdfDoc = await PDFDocument.create();
+  const images = files.filter((f) => f.type.startsWith('image/'));
+  const total = images.length;
+  onProgress?.(0, total, 'Подготовка...');
+
+  for (let idx = 0; idx < images.length; idx += 1) {
+    const file = images[idx];
+    if (!file.type.startsWith('image/')) continue;
+    try {
+      const jpegBytes = await imageToPdfJpeg(file);
+      const image = await newPdfDoc.embedJpg(jpegBytes);
+      const page = newPdfDoc.addPage([image.width, image.height]);
+      page.drawImage(image, { x: 0, y: 0, width: image.width, height: image.height });
+    } catch (e) {
+      console.warn(`Не удалось обработать изображение: ${file.name}.`, e);
+      continue;
+    }
+    onProgress?.(idx + 1, total, `Добавлено: ${idx + 1} из ${total}`);
+  }
+
+  onProgress?.(total, total, 'Сохранение PDF...');
+  const pdfBytes = await newPdfDoc.save({
+    useObjectStreams: true,
+    addDefaultPage: false,
+  });
+  onProgress?.(total, total, 'Готово');
   return new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
 }
 

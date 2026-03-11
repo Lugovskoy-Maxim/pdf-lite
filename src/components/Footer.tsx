@@ -1,6 +1,8 @@
 import Link from "next/link";
-import { FileText, Shield, Zap, Heart } from "lucide-react";
+import Image from "next/image";
+import { Shield, Zap, Heart } from "lucide-react";
 import { TOOLS } from "@/app/tools-config";
+import logoImg from "@/app/logo.png";
 
 export function Footer() {
   const year = new Date().getFullYear();
@@ -11,8 +13,8 @@ export function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-5 gap-8">
           <div className="col-span-2">
             <Link href="/" className="flex items-center gap-2.5 mb-4">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-light)] flex items-center justify-center">
-                <FileText className="w-5 h-5 text-white" />
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-light)] flex items-center justify-center overflow-hidden flex-shrink-0">
+                <Image src={logoImg} alt="" width={36} height={36} className="w-full h-full object-contain" />
               </div>
               <span className="font-bold text-lg text-[var(--foreground)]">forPDF</span>
             </Link>
@@ -84,9 +86,11 @@ export function Footer() {
         <div className="divider my-8" />
         
         <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-          <p className="text-sm text-[var(--muted)]">
-            © {year} forPDF. Все инструменты бесплатны.
-          </p>
+          <div className="flex flex-col sm:flex-row items-center gap-2 sm:gap-4">
+            <p className="text-sm text-[var(--muted)]">
+              © {year} forPDF. Все инструменты бесплатны.
+            </p>
+          </div>
           <p className="text-sm text-[var(--muted)] flex items-center gap-1.5">
             Сделано с <Heart className="w-4 h-4 text-red-500 fill-current" /> для удобства
           </p>

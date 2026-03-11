@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { FileText } from "lucide-react";
+import Image from "next/image";
 import { ThemeToggle } from "./ThemeToggle";
+import { InstallAppButton } from "./InstallAppButton";
+import logoImg from "@/app/logo.png";
 
 export function Header() {
   return (
@@ -13,8 +15,8 @@ export function Header() {
             href="/" 
             className="flex items-center gap-2.5 group"
           >
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-[var(--accent)] to-[var(--accent-light)] flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow">
-              <FileText className="w-5 h-5 text-white" />
+            <div className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center shadow-sm group-hover:shadow-md transition-shadow flex-shrink-0">
+              <Image src={logoImg} alt="" width={36} height={36} className="w-full h-full object-contain" />
             </div>
             <span className="font-bold text-lg text-[var(--foreground)]">
               forPDF
@@ -37,6 +39,7 @@ export function Header() {
           </nav>
           
           <div className="flex items-center gap-3">
+            <InstallAppButton />
             <a
               href="/#tools"
               className="sm:hidden btn btn-sm btn-secondary"

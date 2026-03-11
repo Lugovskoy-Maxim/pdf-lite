@@ -3,14 +3,17 @@
 import { useRef, useState, useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useSearchParams, usePathname, useRouter } from "next/navigation";
-import { Upload, Download, Trash2, FileText, Image, X, CheckCircle2, XCircle, RotateCw, ChevronLeft, Shield, Clock } from "lucide-react";
+import { Upload, Download, Trash2, FileText, Image, X, CheckCircle2, XCircle, RotateCw, ChevronLeft, Shield, Clock, GripVertical, Eye } from "lucide-react";
 import { TOOL_FORMATS, TOOLS } from "@/app/tools-config";
 import type { ToolId } from "@/app/tools-config";
 import { AdPlaceholder } from "./AdPlaceholder";
+import { UserMemoryUsage } from "./UserMemoryUsage";
 import { SignaturePad, SIGNATURE_COLORS } from "./SignaturePad";
 import { SignaturePreview } from "./SignaturePreview";
 import { PDFEditPreview } from "./PDFEditPreview";
-import { PDFPageOrganizer, type OrganizerPageItem } from "./PDFPageOrganizer";
+import { PDFPageOrganizer, MAX_SERVER_FILE_SIZE, type OrganizerPageItem } from "./PDFPageOrganizer";
+import { FileFormatIcon } from "./FileFormatIcon";
+import { setPdfWorkerSrc } from "@/app/utils/pdfUtils";
 import {
   compressPDF, convertPDFToImages, addWatermark, mergePDFs, splitPDF, splitPDFIntoPages,
   rotatePDF, rotatePDFPages, convertImagesToPDF, createZipFromImages, convertPDFToWord,
@@ -35,6 +38,10 @@ const IMAGE_FORMAT_OPTIONS = [
   { value: "PNG", title: "PNG" },
   { value: "WebP", title: "WebP" },
 ] as const;
+
+const MAX_BATCH_FILES = 15;
+const batchToolTabs = ["pdfToImage", "pdfToWord", "pdfToExcel", "pdfToZip", "extractText", "compress"] as const;
+const SERVER_CAPABLE_TABS = ["compress", "merge", "split", "extractText", "organizePages"] as const;
 
 export function InstrumentPageClient({ tool }: Props) {
   const searchParams = useSearchParams();
@@ -64,27 +71,43 @@ export function InstrumentPageClient({ tool }: Props) {
   const [pdfPageCount, setPdfPageCount] = useState<number>(0);
   const [signaturePreviewPage, setSignaturePreviewPage] = useState(1);
   const [organizerPages, setOrganizerPages] = useState<OrganizerPageItem[]>([]);
+  const [processOnServer, setProcessOnServer] = useState(true);
   const [conversionResults, setConversionResults] = useState<{blob: Blob, url: string, name: string}[]>([]);
   const [compressResult, setCompressResult] = useState<{blob: Blob, url: string, originalSize: number, compressedSize: number} | null>(null);
-  const [extractedText, setExtractedText] = useState<{ pageNum: number; text: string }[] | null>(null);
+  const [extractedText, setExtractedText] = useState<{ fileName: string; pages: { pageNum: number; text: string }[] }[] | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [conversionProgress, setConversionProgress] = useState<{ current: number; total: number; label?: string } | null>(null);
   const [statusMessage, setStatusMessage] = useState<{type: 'success' | 'error', text: string} | null>(null);
   const [previewUrls, setPreviewUrls] = useState<(string | null)[]>([]);
+  const [fileListState, setFileListState] = useState<File[]>([]);
+  const [previewFileIndex, setPreviewFileIndex] = useState<number | null>(null);
+  const [pdfPreviewImage, setPdfPreviewImage] = useState<string | null>(null);
+  const [pdfPreviewLoading, setPdfPreviewLoading] = useState(false);
+  const [pdfPreviewError, setPdfPreviewError] = useState<string | null>(null);
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  const [resultPreviewIndex, setResultPreviewIndex] = useState<number | null>(null);
 
   const activeTab = tool.id;
-  const allowMultipleSelection = activeTab === "merge" || activeTab === "imageToPdf" || activeTab === "imageConverter";
-  
+
   const inputAccept = useMemo(() => {
     if (activeTab === "imageToPdf" || activeTab === "imageConverter") return ".jpg,.jpeg,.png,.webp";
     if (activeTab === "merge") return ".pdf";
     return ".pdf";
   }, [activeTab]);
 
-  const fileList = useMemo(() => {
-    if (files && files.length > 0) return Array.from(files);
-    if (file) return [file];
-    return [];
-  }, [files, file]);
+  const fileList = fileListState;
+
+  const pdfFilesList = useMemo(
+    () => fileList.filter((f) => f.type === "application/pdf").slice(0, MAX_BATCH_FILES),
+    [fileList]
+  );
+  const hasAtLeastOnePdf = pdfFilesList.length >= 1;
+  const allowMultipleSelection =
+    activeTab === "merge" ||
+    activeTab === "imageToPdf" ||
+    activeTab === "imageConverter" ||
+    batchToolTabs.includes(activeTab as (typeof batchToolTabs)[number]);
 
   const selectedPdfFile = useMemo(
     () => fileList.find((f) => f.type === "application/pdf") ?? null,
@@ -98,6 +121,32 @@ export function InstrumentPageClient({ tool }: Props) {
 
   const hasOnlyImages = fileList.length > 0 && imageFiles.length === fileList.length;
   const hasAtLeastTwoPdfFiles = fileList.filter((f) => f.type === "application/pdf").length >= 2;
+  const showServerOption = SERVER_CAPABLE_TABS.includes(activeTab as (typeof SERVER_CAPABLE_TABS)[number]) && (activeTab === "merge" ? hasAtLeastTwoPdfFiles : hasAtLeastOnePdf);
+  const mergeTotalSize = useMemo(() => {
+    if (activeTab !== "merge") return 0;
+    return fileListState.filter((f) => f.type === "application/pdf").reduce((s, f) => s + f.size, 0);
+  }, [activeTab, fileListState]);
+  const serverFileTooBig = showServerOption && (activeTab === "merge" ? mergeTotalSize > MAX_SERVER_FILE_SIZE : ((selectedPdfFile ?? pdfFilesList[0])?.size ?? 0) > MAX_SERVER_FILE_SIZE);
+
+  useEffect(() => {
+    const primary = fileListState[0] ?? null;
+    setFile(primary);
+    setFileName(primary?.name ?? "");
+    if (!primary) {
+      setPdfPageCount(0);
+      setEditPageRotations([]);
+      return;
+    }
+    if (primary.type.startsWith("application/pdf")) {
+      getPDFPageCount(primary).then((n) => {
+        setPdfPageCount(n);
+        setEditPageRotations(Array(n).fill(0));
+      });
+    } else {
+      setPdfPageCount(0);
+      setEditPageRotations([]);
+    }
+  }, [fileListState]);
 
   useEffect(() => {
     if ((activeTab === "pdfToImage" || activeTab === "pdfToZip" || activeTab === "imageConverter") && !convertFormat) {
@@ -106,17 +155,52 @@ export function InstrumentPageClient({ tool }: Props) {
   }, [activeTab, convertFormat]);
 
   useEffect(() => {
-    const list = files && files.length > 0 ? Array.from(files) : file ? [file] : [];
-    if (list.length === 0) {
+    if (fileListState.length === 0) {
       setPreviewUrls([]);
       return;
     }
-    const urls: (string | null)[] = list.map((f) =>
+    const urls: (string | null)[] = fileListState.map((f) =>
       f.type.startsWith("image/") ? URL.createObjectURL(f) : null
     );
     setPreviewUrls(urls);
     return () => urls.forEach((u) => u && URL.revokeObjectURL(u));
-  }, [files, file]);
+  }, [fileListState]);
+
+  useEffect(() => {
+    setPdfPreviewImage(null);
+    setPdfPreviewError(null);
+    if (previewFileIndex == null) return;
+    const f = fileListState[previewFileIndex];
+    if (!f || f.type !== "application/pdf") return;
+    let cancelled = false;
+    setPdfPreviewLoading(true);
+    (async () => {
+      try {
+        const pdfjsLib = await import("pdfjs-dist");
+        setPdfWorkerSrc(pdfjsLib);
+        const arrayBuffer = await f.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
+        if (cancelled) return;
+        const page = await pdf.getPage(1);
+        const viewport = page.getViewport({ scale: 1.5 });
+        const canvas = document.createElement("canvas");
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) throw new Error("Не удалось создать canvas");
+        await page.render({ canvasContext: ctx, viewport, canvas } as any).promise;
+        if (cancelled) return;
+        setPdfPreviewImage(canvas.toDataURL("image/png"));
+      } catch (err) {
+        if (!cancelled) setPdfPreviewError(err instanceof Error ? err.message : "Ошибка предпросмотра PDF");
+      } finally {
+        if (!cancelled) setPdfPreviewLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [previewFileIndex, fileListState]);
 
   const parsePageSelection = (value: string, maxPage?: number) => {
     const pages = new Set<number>();
@@ -188,22 +272,8 @@ export function InstrumentPageClient({ tool }: Props) {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = e.target.files;
     if (selectedFiles && selectedFiles.length > 0) {
-      const list = Array.from(selectedFiles);
-      const primaryFile = activeTab === "imageToPdf" || activeTab === "imageConverter"
-        ? list[0]
-        : list.find((f) => f.type === "application/pdf") ?? list[0];
-      setFiles(selectedFiles);
-      setFileName(primaryFile.name);
-      setFile(primaryFile);
-      if (primaryFile.type.startsWith("application/pdf")) {
-        getPDFPageCount(primaryFile).then((n) => {
-          setPdfPageCount(n);
-          setEditPageRotations(Array(n).fill(0));
-        });
-      } else {
-        setPdfPageCount(0);
-        setEditPageRotations([]);
-      }
+      setFileListState((prev) => [...prev, ...Array.from(selectedFiles)]);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
   };
 
@@ -211,22 +281,7 @@ export function InstrumentPageClient({ tool }: Props) {
     e.preventDefault();
     const droppedFiles = e.dataTransfer.files;
     if (droppedFiles && droppedFiles.length > 0) {
-      const list = Array.from(droppedFiles);
-      const primaryFile = activeTab === "imageToPdf" || activeTab === "imageConverter"
-        ? list[0]
-        : list.find((f) => f.type === "application/pdf") ?? list[0];
-      setFiles(droppedFiles);
-      setFileName(primaryFile.name);
-      setFile(primaryFile);
-      if (primaryFile.type.startsWith("application/pdf")) {
-        getPDFPageCount(primaryFile).then((n) => {
-          setPdfPageCount(n);
-          setEditPageRotations(Array(n).fill(0));
-        });
-      } else {
-        setPdfPageCount(0);
-        setEditPageRotations([]);
-      }
+      setFileListState((prev) => [...prev, ...Array.from(droppedFiles)]);
     }
   };
 
@@ -235,6 +290,7 @@ export function InstrumentPageClient({ tool }: Props) {
   };
 
   const handleClearFile = () => {
+    setFileListState([]);
     setFile(null);
     setFiles(null);
     setFileName("");
@@ -245,9 +301,40 @@ export function InstrumentPageClient({ tool }: Props) {
     clearCompressResult();
     setExtractedText(null);
     setSignaturePdfPosition(null);
+    setPreviewFileIndex(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
+  };
+
+  const handleRemoveFile = (index: number) => {
+    setFileListState((prev) => prev.filter((_, i) => i !== index));
+    if (previewFileIndex === index) setPreviewFileIndex(null);
+    else if (previewFileIndex != null && previewFileIndex > index) setPreviewFileIndex(previewFileIndex - 1);
+  };
+
+  const handleReorderFile = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    setFileListState((prev) => {
+      const next = [...prev];
+      const [removed] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, removed);
+      return next;
+    });
+    if (previewFileIndex === fromIndex) setPreviewFileIndex(toIndex);
+    else if (previewFileIndex != null) {
+      if (previewFileIndex < fromIndex && previewFileIndex >= toIndex) setPreviewFileIndex(previewFileIndex + 1);
+      else if (previewFileIndex > fromIndex && previewFileIndex <= toIndex) setPreviewFileIndex(previewFileIndex - 1);
+    }
+    setDraggedIndex(null);
+    setDropIndex(null);
+  };
+
+  const handleSortByNameAsc = () => {
+    setFileListState((prev) => [...prev].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })));
+  };
+  const handleSortByNameDesc = () => {
+    setFileListState((prev) => [...prev].sort((a, b) => b.name.localeCompare(a.name, undefined, { sensitivity: "base" })));
   };
 
   const triggerFileInput = () => {
@@ -324,20 +411,33 @@ export function InstrumentPageClient({ tool }: Props) {
 
   // Handler functions
   const handleConvert = async () => {
-    if (!selectedPdfFile) { showStatus('error', 'Выберите PDF файл'); return; }
+    if (pdfFilesList.length === 0) { showStatus('error', 'Выберите PDF файл(ы)'); return; }
     if (!convertFormat) { showStatus('error', 'Выберите формат'); return; }
+    const ext = convertFormat.toLowerCase();
     setIsLoading(true);
+    setConversionProgress({ current: 0, total: 0, label: "Подготовка..." });
     try {
-      const images = await convertPDFToImages(selectedPdfFile, convertFormat);
-      const results = images.map((blob, index) => ({
-        blob, url: URL.createObjectURL(blob), name: `page-${index + 1}.${convertFormat.toLowerCase()}`
-      }));
-      replaceConversionResults(results);
-      showStatus('success', `Готово: ${images.length} страниц`, 5000);
+      const allResults: { blob: Blob; url: string; name: string }[] = [];
+      const total = pdfFilesList.length;
+      for (let fIdx = 0; fIdx < total; fIdx++) {
+        const pdfFile = pdfFilesList[fIdx];
+        const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+        setConversionProgress({ current: fIdx, total, label: total > 1 ? `Файл ${fIdx + 1} из ${total}` : "Конвертация..." });
+        const images = await convertPDFToImages(pdfFile, convertFormat, (current, tot, label) => {
+          setConversionProgress({ current: fIdx * 100 + current, total: total * 100, label: total > 1 ? `Файл ${fIdx + 1}/${total}. ${label ?? ""}` : label });
+        });
+        for (let i = 0; i < images.length; i++) {
+          const name = total > 1 ? `${baseName}-стр${i + 1}.${ext}` : `page-${i + 1}.${ext}`;
+          allResults.push({ blob: images[i], url: URL.createObjectURL(images[i]), name });
+        }
+      }
+      replaceConversionResults(allResults);
+      showStatus('success', total > 1 ? `Готово: ${total} файлов, ${allResults.length} изображений` : `Готово: ${allResults.length} страниц`, 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
       setIsLoading(false);
+      setConversionProgress(null);
     }
   };
 
@@ -345,7 +445,10 @@ export function InstrumentPageClient({ tool }: Props) {
     if (!hasOnlyImages) { showStatus('error', 'Выберите изображения'); return; }
     setIsLoading(true);
     try {
-      const pdfBlob = await convertImagesToPDF(imageFiles);
+      setConversionProgress({ current: 0, total: imageFiles.length, label: "Подготовка..." });
+      const pdfBlob = await convertImagesToPDF(imageFiles, (current, total, label) => {
+        setConversionProgress({ current, total, label: label ?? `${current} из ${total}` });
+      });
       const url = URL.createObjectURL(pdfBlob);
       replaceConversionResults([{ blob: pdfBlob, url, name: `images.pdf` }]);
       showStatus('success', 'PDF создан', 5000);
@@ -353,31 +456,62 @@ export function InstrumentPageClient({ tool }: Props) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
       setIsLoading(false);
+      setConversionProgress(null);
     }
   };
 
   const handleImageFormatConvert = async () => {
     if (!hasOnlyImages || !convertFormat) { showStatus('error', 'Выберите изображения и формат'); return; }
     setIsLoading(true);
+    setConversionProgress({ current: 0, total: imageFiles.length, label: "Подготовка..." });
     try {
-      const results = await convertImagesBetweenFormats(imageFiles, convertFormat);
+      const results = await convertImagesBetweenFormats(imageFiles, convertFormat, (current, total, label) => {
+        setConversionProgress({ current, total, label: label ?? `${current} из ${total}` });
+      });
       replaceConversionResults(results.map((item) => ({ blob: item.blob, url: URL.createObjectURL(item.blob), name: item.name })));
       showStatus('success', `Готово: ${results.length} файлов`, 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
       setIsLoading(false);
+      setConversionProgress(null);
     }
   };
 
   const handleCompress = async () => {
-    if (!selectedPdfFile) { showStatus('error', 'Выберите PDF файл'); return; }
+    if (pdfFilesList.length === 0) { showStatus('error', 'Выберите PDF файл(ы)'); return; }
     setIsLoading(true);
     try {
-      const compressedFile = await compressPDF(selectedPdfFile, compressionLevel);
-      const url = URL.createObjectURL(compressedFile);
-      replaceCompressResult({ blob: compressedFile, url, originalSize: selectedPdfFile.size, compressedSize: compressedFile.size });
-      showStatus('success', 'Сжатие завершено', 5000);
+      if (pdfFilesList.length === 1) {
+        const pdfFile = pdfFilesList[0];
+        let compressedFile: Blob;
+        if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
+          const fd = new FormData(); fd.append("file", pdfFile); fd.append("compressionLevel", compressionLevel);
+          const res = await fetch("/api/pdf/compress", { method: "POST", body: fd });
+          compressedFile = res.ok ? await res.blob() : await compressPDF(pdfFile, compressionLevel);
+        } else compressedFile = await compressPDF(pdfFile, compressionLevel);
+        const url = URL.createObjectURL(compressedFile);
+        replaceCompressResult({ blob: compressedFile, url, originalSize: pdfFile.size, compressedSize: compressedFile.size });
+        showStatus('success', 'Сжатие завершено', 5000);
+      } else {
+        const results: { blob: Blob; url: string; name: string }[] = [];
+        const total = pdfFilesList.length;
+        for (let i = 0; i < total; i++) {
+          const pdfFile = pdfFilesList[i];
+          setConversionProgress({ current: i + 1, total, label: `Файл ${i + 1} из ${total}` });
+          let compressedFile: Blob;
+          if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
+            const fd = new FormData(); fd.append("file", pdfFile); fd.append("compressionLevel", compressionLevel);
+            const res = await fetch("/api/pdf/compress", { method: "POST", body: fd });
+            compressedFile = res.ok ? await res.blob() : await compressPDF(pdfFile, compressionLevel);
+          } else compressedFile = await compressPDF(pdfFile, compressionLevel);
+          const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+          results.push({ blob: compressedFile, url: URL.createObjectURL(compressedFile), name: `compressed-${baseName}.pdf` });
+        }
+        replaceConversionResults(results);
+        setConversionProgress(null);
+        showStatus('success', `Сжато файлов: ${total}`, 5000);
+      }
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
@@ -387,10 +521,17 @@ export function InstrumentPageClient({ tool }: Props) {
 
   const handleMerge = async () => {
     if (!hasAtLeastTwoPdfFiles) { showStatus('error', 'Выберите минимум 2 PDF файла'); return; }
+    const pdfFiles = fileListState.filter((f) => f.type === 'application/pdf');
+    const totalSize = pdfFiles.reduce((s, f) => s + f.size, 0);
     setIsLoading(true);
     try {
-      const pdfFiles = Array.from(files!).filter((f) => f.type === 'application/pdf');
-      const mergedBlob = await mergePDFs(pdfFiles);
+      let mergedBlob: Blob;
+      if (processOnServer && totalSize <= MAX_SERVER_FILE_SIZE) {
+        const fd = new FormData();
+        pdfFiles.forEach((f, i) => fd.append(`file${i}`, f));
+        const res = await fetch("/api/pdf/merge", { method: "POST", body: fd });
+        mergedBlob = res.ok ? await res.blob() : await mergePDFs(pdfFiles);
+      } else mergedBlob = await mergePDFs(pdfFiles);
       const url = URL.createObjectURL(mergedBlob);
       replaceConversionResults([{ blob: mergedBlob, url, name: `merged.pdf` }]);
       showStatus('success', `Объединено ${pdfFiles.length} файлов`, 5000);
@@ -406,12 +547,35 @@ export function InstrumentPageClient({ tool }: Props) {
     setIsLoading(true);
     try {
       let pdfBlobs: Blob[];
-      if (splitMode === 'all') {
-        pdfBlobs = await splitPDFIntoPages(selectedPdfFile);
+      if (processOnServer && selectedPdfFile.size <= MAX_SERVER_FILE_SIZE) {
+        const fd = new FormData();
+        fd.append("file", selectedPdfFile);
+        fd.append("mode", splitMode);
+        if (splitMode === "range") fd.append("range", splitRange);
+        const res = await fetch("/api/pdf/split", { method: "POST", body: fd });
+        if (res.ok) {
+          const json = (await res.json()) as { files: string[] };
+          pdfBlobs = json.files.map((b64) => {
+            const bin = atob(b64);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            return new Blob([bytes], { type: "application/pdf" });
+          });
+        } else {
+          if (splitMode === 'all') pdfBlobs = await splitPDFIntoPages(selectedPdfFile);
+          else {
+            const parts = parsePageSelection(splitRange, pdfPageCount || undefined);
+            if (parts.length === 0) { showStatus('error', 'Укажите страницы'); setIsLoading(false); return; }
+            pdfBlobs = await splitPDF(selectedPdfFile, parts);
+          }
+        }
       } else {
-        const parts = parsePageSelection(splitRange, pdfPageCount || undefined);
-        if (parts.length === 0) { showStatus('error', 'Укажите страницы'); setIsLoading(false); return; }
-        pdfBlobs = await splitPDF(selectedPdfFile, parts);
+        if (splitMode === 'all') pdfBlobs = await splitPDFIntoPages(selectedPdfFile);
+        else {
+          const parts = parsePageSelection(splitRange, pdfPageCount || undefined);
+          if (parts.length === 0) { showStatus('error', 'Укажите страницы'); setIsLoading(false); return; }
+          pdfBlobs = await splitPDF(selectedPdfFile, parts);
+        }
       }
       replaceConversionResults(pdfBlobs.map((blob, i) => ({ blob, url: URL.createObjectURL(blob), name: `page-${i + 1}.pdf` })));
       showStatus('success', `Разделено на ${pdfBlobs.length} файлов`, 5000);
@@ -423,13 +587,21 @@ export function InstrumentPageClient({ tool }: Props) {
   };
 
   const handlePDFToWord = async () => {
-    if (!selectedPdfFile) { showStatus('error', 'Выберите PDF файл'); return; }
+    if (pdfFilesList.length === 0) { showStatus('error', 'Выберите PDF файл(ы)'); return; }
     setIsLoading(true);
     try {
-      const blob = await convertPDFToWord(selectedPdfFile);
-      const url = URL.createObjectURL(blob);
-      replaceConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.docx') }]);
-      showStatus('success', 'Готово', 5000);
+      const results: { blob: Blob; url: string; name: string }[] = [];
+      const total = pdfFilesList.length;
+      for (let i = 0; i < total; i++) {
+        const pdfFile = pdfFilesList[i];
+        if (total > 1) setConversionProgress({ current: i + 1, total, label: `Файл ${i + 1} из ${total}` });
+        const blob = await convertPDFToWord(pdfFile);
+        const baseName = pdfFile.name.replace(/\.pdf$/i, '');
+        results.push({ blob, url: URL.createObjectURL(blob), name: `${baseName}.docx` });
+      }
+      replaceConversionResults(results);
+      setConversionProgress(null);
+      showStatus('success', total > 1 ? `Готово: ${total} файлов в Word` : 'Готово', 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
@@ -438,13 +610,21 @@ export function InstrumentPageClient({ tool }: Props) {
   };
 
   const handlePDFToExcel = async () => {
-    if (!selectedPdfFile) { showStatus('error', 'Выберите PDF файл'); return; }
+    if (pdfFilesList.length === 0) { showStatus('error', 'Выберите PDF файл(ы)'); return; }
     setIsLoading(true);
     try {
-      const blob = await convertPDFToExcel(selectedPdfFile);
-      const url = URL.createObjectURL(blob);
-      replaceConversionResults([{ blob, url, name: fileName.replace(/\.pdf$/i, '.xlsx') }]);
-      showStatus('success', 'Готово', 5000);
+      const results: { blob: Blob; url: string; name: string }[] = [];
+      const total = pdfFilesList.length;
+      for (let i = 0; i < total; i++) {
+        const pdfFile = pdfFilesList[i];
+        if (total > 1) setConversionProgress({ current: i + 1, total, label: `Файл ${i + 1} из ${total}` });
+        const blob = await convertPDFToExcel(pdfFile);
+        const baseName = pdfFile.name.replace(/\.pdf$/i, '');
+        results.push({ blob, url: URL.createObjectURL(blob), name: `${baseName}.xlsx` });
+      }
+      replaceConversionResults(results);
+      setConversionProgress(null);
+      showStatus('success', total > 1 ? `Готово: ${total} файлов в Excel` : 'Готово', 5000);
     } catch (error) {
       showStatus('error', 'Ошибка: ' + (error as Error).message);
     } finally {
@@ -453,22 +633,42 @@ export function InstrumentPageClient({ tool }: Props) {
   };
 
   const handlePdfToZip = async () => {
-    if (!selectedPdfFile) { showStatus("error", "Выберите PDF файл"); return; }
+    if (pdfFilesList.length === 0) { showStatus("error", "Выберите PDF файл(ы)"); return; }
     const format = convertFormat || "PNG";
+    const ext = format.toLowerCase();
     setIsLoading(true);
     try {
-      const images = await convertPDFToImages(selectedPdfFile, format);
-      const items = images.map((blob, i) => ({ blob, name: `page-${i + 1}.${format.toLowerCase()}` }));
-      const zipBlob = await createZipFromImages(items);
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${fileName.replace(/\.pdf$/i, "")}-pages.zip`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      showStatus("success", `Архив скачан`, 5000);
+      if (pdfFilesList.length === 1) {
+        const pdfFile = pdfFilesList[0];
+        const images = await convertPDFToImages(pdfFile, format);
+        const items = images.map((blob, i) => ({ blob, name: `page-${i + 1}.${ext}` }));
+        const zipBlob = await createZipFromImages(items);
+        const url = URL.createObjectURL(zipBlob);
+        const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `${baseName}-pages.zip`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        showStatus("success", "Архив скачан", 5000);
+      } else {
+        const results: { blob: Blob; url: string; name: string }[] = [];
+        const total = pdfFilesList.length;
+        for (let i = 0; i < total; i++) {
+          const pdfFile = pdfFilesList[i];
+          setConversionProgress({ current: i + 1, total, label: `Файл ${i + 1} из ${total}` });
+          const images = await convertPDFToImages(pdfFile, format);
+          const items = images.map((blob, p) => ({ blob, name: `page-${p + 1}.${ext}` }));
+          const zipBlob = await createZipFromImages(items);
+          const baseName = pdfFile.name.replace(/\.pdf$/i, "");
+          results.push({ blob: zipBlob, url: URL.createObjectURL(zipBlob), name: `${baseName}-pages.zip` });
+        }
+        setConversionProgress(null);
+        replaceConversionResults(results);
+        showStatus("success", `Готово: ${total} архивов`, 5000);
+      }
     } catch (error) {
       showStatus("error", "Ошибка: " + (error as Error).message);
     } finally {
@@ -477,12 +677,26 @@ export function InstrumentPageClient({ tool }: Props) {
   };
 
   const handleExtractText = async () => {
-    if (!selectedPdfFile) { showStatus("error", "Выберите PDF файл"); return; }
+    if (pdfFilesList.length === 0) { showStatus("error", "Выберите PDF файл(ы)"); return; }
     setIsLoading(true);
     try {
-      const pages = await extractTextFromPDF(selectedPdfFile);
-      setExtractedText(pages);
-      showStatus("success", "Текст извлечён", 5000);
+      const total = pdfFilesList.length;
+      const sections: { fileName: string; pages: { pageNum: number; text: string }[] }[] = [];
+      for (let i = 0; i < total; i++) {
+        const pdfFile = pdfFilesList[i];
+        if (total > 1) setConversionProgress({ current: i + 1, total, label: `Файл ${i + 1} из ${total}` });
+        let pages: { pageNum: number; text: string }[];
+        if (processOnServer && pdfFile.size <= MAX_SERVER_FILE_SIZE) {
+          const fd = new FormData(); fd.append("file", pdfFile);
+          const res = await fetch("/api/pdf/extract-text", { method: "POST", body: fd });
+          if (res.ok) { const data = (await res.json()) as { pages: { pageNum: number; text: string }[] }; pages = data.pages; }
+          else pages = await extractTextFromPDF(pdfFile);
+        } else pages = await extractTextFromPDF(pdfFile);
+        sections.push({ fileName: pdfFile.name, pages });
+      }
+      setConversionProgress(null);
+      setExtractedText(sections);
+      showStatus("success", total > 1 ? `Текст извлечён из ${total} файлов` : "Текст извлечён", 5000);
     } catch (error) {
       showStatus("error", "Ошибка: " + (error as Error).message);
     } finally {
@@ -571,30 +785,28 @@ export function InstrumentPageClient({ tool }: Props) {
     <>
       {/* Header */}
       <section className="border-b border-[var(--border)] bg-gradient-to-b from-[var(--surface)] to-transparent">
-        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-8">
-          <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--foreground)] transition-colors mb-6 group">
+        <div className="max-w-4xl mx-auto px-4 sm:px-6 py-4">
+          <Link href="/" className="inline-flex items-center gap-1.5 text-sm text-[var(--muted)] hover:text-[var(--foreground)] transition-colors mb-3 group">
             <ChevronLeft className="w-4 h-4 group-hover:-translate-x-0.5 transition-transform" />
             Все инструменты
           </Link>
-          
-          <div className="flex items-start gap-4">
-            <div className="icon-box icon-box-accent w-14 h-14 flex-shrink-0">
-              <img src={`/icons/${tool.id}.svg`} alt="" className="w-7 h-7" />
+          <div className="flex items-start gap-3">
+            <div className="icon-box icon-box-accent w-10 h-10 flex-shrink-0">
+              <img src={`/icons/${tool.id}.svg`} alt="" className="w-5 h-5" />
             </div>
-            <div>
-              <h1 className="text-2xl md:text-3xl font-bold text-[var(--foreground)]">
+            <div className="min-w-0">
+              <h1 className="text-xl md:text-2xl font-bold text-[var(--foreground)]">
                 {toolTitle}
               </h1>
-              <p className="mt-2 text-[var(--muted)] leading-relaxed">
+              <p className="mt-1 text-sm text-[var(--muted)] leading-snug">
                 {tool.description}
               </p>
-              
-              <div className="mt-4 flex flex-wrap gap-2">
-                <div className="badge badge-success">
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <div className="badge badge-success text-xs">
                   <Shield className="w-3 h-3" />
                   Локальная обработка
                 </div>
-                <div className="badge">
+                <div className="badge text-xs">
                   <Clock className="w-3 h-3" />
                   Быстро
                 </div>
@@ -604,16 +816,23 @@ export function InstrumentPageClient({ tool }: Props) {
         </div>
       </section>
 
+      {/* Ad — над инструментом */}
+      <section className="px-4 sm:px-6 pt-4 pb-2">
+        <div className="max-w-6xl mx-auto">
+          <AdPlaceholder size="banner" />
+        </div>
+      </section>
+
       {/* Main Content */}
       <section className="py-8 px-4 sm:px-6">
-        <div className="max-w-4xl mx-auto">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            {/* Tool Area */}
-            <div className="lg:col-span-2">
+        <div className="max-w-6xl mx-auto">
+          <div className="flex flex-col gap-8">
+            {/* Tool Area — максимальная рабочая зона */}
+            <div className="min-w-0">
               <div className="card p-6">
                 {/* Upload Zone */}
                 <div
-                  className="upload-zone p-8 text-center mb-6"
+                  className="upload-zone p-8 sm:p-12 text-center mb-6 min-h-[320px] sm:min-h-[380px] flex flex-col items-center justify-center"
                   onDrop={handleDrop}
                   onDragOver={handleDragOver}
                 >
@@ -640,36 +859,128 @@ export function InstrumentPageClient({ tool }: Props) {
                 {/* File List */}
                 {fileList.length > 0 && (
                   <div className="mb-6">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                       <span className="text-sm text-[var(--muted)]">
                         Файлов: {fileList.length}
+                        {batchToolTabs.includes(activeTab as (typeof batchToolTabs)[number]) &&
+                          pdfFilesList.length > 0 &&
+                          (pdfFilesList.length < fileList.filter((f) => f.type === "application/pdf").length ? (
+                            <span className="ml-1">(обработаем первые {pdfFilesList.length})</span>
+                          ) : pdfFilesList.length > 1 ? (
+                            <span className="ml-1">— по очереди, макс. {MAX_BATCH_FILES}</span>
+                          ) : null)}
                       </span>
-                      <button onClick={handleClearFile} className="btn btn-ghost btn-sm">
-                        <X className="w-4 h-4" />
-                        Очистить
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs text-[var(--muted)] mr-1">По имени:</span>
+                        <button type="button" onClick={handleSortByNameAsc} className="btn btn-ghost btn-sm text-xs" title="По возрастанию (А→Я)">
+                          А→Я
+                        </button>
+                        <button type="button" onClick={handleSortByNameDesc} className="btn btn-ghost btn-sm text-xs" title="По убыванию (Я→А)">
+                          Я→А
+                        </button>
+                        <button onClick={handleClearFile} className="btn btn-ghost btn-sm ml-1">
+                          <X className="w-4 h-4" />
+                          Очистить
+                        </button>
+                      </div>
                     </div>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                    <p className="text-xs text-[var(--muted)] mb-2">Добавить ещё: нажмите «Выбрать файлы» или перетащите в зону выше.</p>
+                    <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-3">
                       {fileList.map((f, index) => {
-                        const isPdf = f.type.startsWith("application/pdf");
                         const previewUrl = previewUrls[index] ?? null;
                         return (
-                          <div key={`${f.name}-${index}`} className="card p-3">
-                            <div className="aspect-square bg-[var(--surface)] rounded flex items-center justify-center mb-2">
-                              {previewUrl ? (
-                                <img src={previewUrl} alt="" className="w-full h-full object-cover rounded" />
-                              ) : isPdf ? (
-                                <FileText className="w-8 h-8 text-[var(--muted)]" />
-                              ) : (
-                                <Image className="w-8 h-8 text-[var(--muted)]" />
-                              )}
+                          <div
+                            key={`${f.name}-${index}`}
+                            className={`card p-1.5 min-w-0 relative group flex flex-col aspect-[210/297] ${draggedIndex === index ? "opacity-50" : ""} ${dropIndex === index ? "ring-2 ring-[var(--accent)]" : ""}`}
+                            draggable
+                            onDragStart={() => setDraggedIndex(index)}
+                            onDragOver={(e) => { e.preventDefault(); setDropIndex(index); }}
+                            onDragLeave={() => setDropIndex(null)}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              if (draggedIndex != null) handleReorderFile(draggedIndex, index);
+                              setDraggedIndex(null);
+                              setDropIndex(null);
+                            }}
+                            onDragEnd={() => { setDraggedIndex(null); setDropIndex(null); }}
+                          >
+                            <div className="absolute top-1 right-1 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); setPreviewFileIndex(index); }}
+                                className="p-1 rounded bg-[var(--background)]/90 hover:bg-[var(--surface)] border border-[var(--border)]"
+                                title="Предпросмотр"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-[var(--foreground)]" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
+                                className="p-1 rounded bg-[var(--background)]/90 hover:bg-red-100 dark:hover:bg-red-900/30 border border-[var(--border)]"
+                                title="Удалить"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
+                              </button>
                             </div>
-                            <p className="text-xs text-[var(--foreground)] truncate">{f.name}</p>
-                            <p className="text-xs text-[var(--muted)]">{formatFileSize(f.size)}</p>
+                            <div className="flex-1 min-h-0 relative bg-[var(--surface)] rounded flex items-center justify-center overflow-hidden cursor-move" title="Перетащите для изменения порядка">
+                              {previewUrl ? (
+                                <img src={previewUrl} alt="" className="w-full h-full object-cover" />
+                              ) : (
+                                <FileFormatIcon file={f} size="md" />
+                              )}
+                              <div className="absolute bottom-1 left-1 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                                <GripVertical className="w-4 h-4 text-[var(--muted)]" />
+                              </div>
+                            </div>
+                            <div className="mt-1 flex-shrink-0 min-w-0">
+                              <p className="text-[10px] sm:text-xs text-[var(--foreground)] truncate pr-10" title={f.name}>{f.name}</p>
+                              <p className="text-[10px] sm:text-xs text-[var(--muted)]">{formatFileSize(f.size)}</p>
+                            </div>
                           </div>
                         );
                       })}
                     </div>
+
+                    {/* Модальное окно предпросмотра */}
+                    {previewFileIndex != null && fileList[previewFileIndex] && (
+                      <div
+                        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+                        onClick={() => setPreviewFileIndex(null)}
+                      >
+                        <div className="bg-[var(--background)] rounded-xl shadow-xl max-w-4xl max-h-[90vh] w-full overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-between p-3 border-b border-[var(--border)]">
+                            <p className="text-sm font-medium truncate">{fileList[previewFileIndex].name}</p>
+                            <button type="button" onClick={() => setPreviewFileIndex(null)} className="p-2 rounded-lg hover:bg-[var(--surface)]">
+                              <X className="w-5 h-5" />
+                            </button>
+                          </div>
+                          <div className="flex-1 overflow-auto p-4 flex items-center justify-center min-h-[200px]">
+                            {previewUrls[previewFileIndex] ? (
+                              fileList[previewFileIndex].type.startsWith("image/") ? (
+                                <img src={previewUrls[previewFileIndex]!} alt="" className="max-w-full max-h-[70vh] object-contain rounded" />
+                              ) : (
+                                <p className="text-[var(--muted)]">Превью доступно только для изображений.</p>
+                              )
+                            ) : fileList[previewFileIndex].type === "application/pdf" ? (
+                              pdfPreviewLoading ? (
+                                <div className="flex items-center gap-3 text-sm text-[var(--muted)]">
+                                  <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin" />
+                                  Загружаем предпросмотр…
+                                </div>
+                              ) : pdfPreviewError ? (
+                                <p className="text-[var(--muted)]">{pdfPreviewError}</p>
+                              ) : pdfPreviewImage ? (
+                                <img src={pdfPreviewImage} alt="" className="max-w-full max-h-[70vh] object-contain rounded" />
+                              ) : (
+                                <p className="text-[var(--muted)]">Не удалось построить предпросмотр PDF.</p>
+                              )
+                            ) : (
+                              <FileFormatIcon file={fileList[previewFileIndex]} size="md" className="w-16 h-16" />
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -691,6 +1002,7 @@ export function InstrumentPageClient({ tool }: Props) {
                       pdfFile={selectedPdfFile}
                       pageCount={pdfPageCount}
                       onChange={setOrganizerPages}
+                      useServerPreviews={processOnServer}
                     />
                   </div>
                 )}
@@ -727,14 +1039,15 @@ export function InstrumentPageClient({ tool }: Props) {
                 <div className="space-y-4">
                   {activeTab === "pdfToImage" && (
                     <div>
-                      <label className="text-sm text-[var(--muted)] mb-2 block">Формат</label>
-                      <div className="flex flex-wrap gap-2">
+                      <label className="text-sm text-[var(--muted)] mb-2 block">В какой формат сохранить страницы</label>
+                      <div className="flex flex-wrap gap-3">
                         {IMAGE_FORMAT_OPTIONS.map((format) => (
                           <button
                             key={format.value}
                             onClick={() => setConvertFormat(format.value)}
-                            className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                            className={`btn inline-flex items-center gap-2 px-4 py-2.5 text-base ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
                           >
+                            <FileFormatIcon extension={format.value.toLowerCase()} size="md" />
                             {format.title}
                           </button>
                         ))}
@@ -744,14 +1057,15 @@ export function InstrumentPageClient({ tool }: Props) {
 
                   {activeTab === "imageConverter" && (
                     <div>
-                      <label className="text-sm text-[var(--muted)] mb-2 block">Формат</label>
-                      <div className="flex flex-wrap gap-2">
+                      <label className="text-sm text-[var(--muted)] mb-2 block">Конвертировать изображения в формат</label>
+                      <div className="flex flex-wrap gap-3">
                         {IMAGE_FORMAT_OPTIONS.map((format) => (
                           <button
                             key={format.value}
                             onClick={() => setConvertFormat(format.value)}
-                            className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                            className={`btn inline-flex items-center gap-2 px-4 py-2.5 text-base ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
                           >
+                            <FileFormatIcon extension={format.value.toLowerCase()} size="md" />
                             {format.title}
                           </button>
                         ))}
@@ -761,14 +1075,15 @@ export function InstrumentPageClient({ tool }: Props) {
 
                   {activeTab === "pdfToZip" && (
                     <div>
-                      <label className="text-sm text-[var(--muted)] mb-2 block">Формат изображений</label>
-                      <div className="flex flex-wrap gap-2">
+                      <label className="text-sm text-[var(--muted)] mb-2 block">Формат картинок в архиве</label>
+                      <div className="flex flex-wrap gap-3">
                         {IMAGE_FORMAT_OPTIONS.map((format) => (
                           <button
                             key={format.value}
                             onClick={() => setConvertFormat(format.value)}
-                            className={`btn btn-sm ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
+                            className={`btn inline-flex items-center gap-2 px-4 py-2.5 text-base ${convertFormat === format.value ? "btn-primary" : "btn-secondary"}`}
                           >
+                            <FileFormatIcon extension={format.value.toLowerCase()} size="md" />
                             {format.title}
                           </button>
                         ))}
@@ -778,7 +1093,7 @@ export function InstrumentPageClient({ tool }: Props) {
 
                   {activeTab === "compress" && (
                     <div>
-                      <label className="text-sm text-[var(--muted)] mb-2 block">Уровень сжатия</label>
+                      <label className="text-sm text-[var(--muted)] mb-2 block">Насколько сильно сжимать PDF</label>
                       <div className="flex flex-wrap gap-2">
                         {[
                           { level: "low", name: "Низкое" },
@@ -800,7 +1115,7 @@ export function InstrumentPageClient({ tool }: Props) {
                   {activeTab === "split" && (
                     <div className="space-y-3">
                       <div>
-                        <label className="text-sm text-[var(--muted)] mb-2 block">Режим</label>
+                        <label className="text-sm text-[var(--muted)] mb-2 block">Как разделить документ</label>
                         <div className="flex gap-2">
                           <button
                             onClick={() => setSplitMode("all")}
@@ -831,7 +1146,7 @@ export function InstrumentPageClient({ tool }: Props) {
                   {activeTab === "signature" && (
                     <div className="space-y-4">
                       <div>
-                        <label className="text-sm text-[var(--muted)] mb-2 block">Страницы</label>
+                        <label className="text-sm text-[var(--muted)] mb-2 block">На каких страницах поставить подпись</label>
                         <div className="flex gap-2">
                           <button
                             onClick={() => setSignaturePagesMode("all")}
@@ -876,7 +1191,7 @@ export function InstrumentPageClient({ tool }: Props) {
                   {activeTab === "edit" && (
                     <div className="space-y-4">
                       <div>
-                        <label className="text-sm text-[var(--muted)] mb-2 block">Действия</label>
+                        <label className="text-sm text-[var(--muted)] mb-2 block">Что сделать с документом</label>
                         <div className="flex gap-2">
                           <button
                             onClick={() => toggleEditTool("Повернуть")}
@@ -919,11 +1234,33 @@ export function InstrumentPageClient({ tool }: Props) {
                     </div>
                   )}
 
+                  {/* Обработка на сервере (до 20 МБ) */}
+                  {showServerOption && (
+                    <div className="mb-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={processOnServer}
+                          onChange={(e) => setProcessOnServer(e.target.checked)}
+                          className="rounded border-[var(--border)]"
+                        />
+                        <span className="text-sm text-[var(--foreground)]">
+                          Обработка на сервере (макс. 20 МБ)
+                        </span>
+                      </label>
+                      {serverFileTooBig && (
+                        <p className="text-xs text-[var(--muted)] mt-1">
+                          {activeTab === "merge" ? "Суммарный размер файлов больше 20 МБ — объединение в браузере." : "Файл больше 20 МБ — обработка в браузере."}
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   {/* Action Button */}
                   <div className="pt-4">
                     {activeTab === "pdfToImage" && (
-                      <button onClick={handleConvert} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                        {isLoading ? "Обработка..." : `Конвертировать`}
+                      <button onClick={handleConvert} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                        {isLoading ? "Обработка..." : pdfFilesList.length > 1 ? `Конвертировать ${pdfFilesList.length} файлов` : "Конвертировать"}
                       </button>
                     )}
                     {activeTab === "imageToPdf" && (
@@ -937,23 +1274,23 @@ export function InstrumentPageClient({ tool }: Props) {
                       </button>
                     )}
                     {activeTab === "pdfToWord" && (
-                      <button onClick={handlePDFToWord} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                        {isLoading ? "Обработка..." : "Сохранить как Word"}
+                      <button onClick={handlePDFToWord} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                        {isLoading ? "Обработка..." : pdfFilesList.length > 1 ? `В Word (${pdfFilesList.length} файлов)` : "Сохранить как Word"}
                       </button>
                     )}
                     {activeTab === "pdfToExcel" && (
-                      <button onClick={handlePDFToExcel} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                        {isLoading ? "Обработка..." : "Сохранить как Excel"}
+                      <button onClick={handlePDFToExcel} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                        {isLoading ? "Обработка..." : pdfFilesList.length > 1 ? `В Excel (${pdfFilesList.length} файлов)` : "Сохранить как Excel"}
                       </button>
                     )}
                     {activeTab === "pdfToZip" && (
-                      <button onClick={handlePdfToZip} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                        {isLoading ? "Обработка..." : "Скачать как ZIP"}
+                      <button onClick={handlePdfToZip} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                        {isLoading ? "Обработка..." : pdfFilesList.length > 1 ? `Скачать ${pdfFilesList.length} ZIP` : "Скачать как ZIP"}
                       </button>
                     )}
                     {activeTab === "extractText" && (
-                      <button onClick={handleExtractText} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                        {isLoading ? "Обработка..." : "Извлечь текст"}
+                      <button onClick={handleExtractText} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                        {isLoading ? "Извлечение..." : pdfFilesList.length > 1 ? `Извлечь из ${pdfFilesList.length} файлов` : "Извлечь текст"}
                       </button>
                     )}
                     {activeTab === "merge" && (
@@ -967,8 +1304,8 @@ export function InstrumentPageClient({ tool }: Props) {
                       </button>
                     )}
                     {activeTab === "compress" && (
-                      <button onClick={handleCompress} disabled={isLoading || !selectedPdfFile} className="btn btn-primary w-full">
-                        {isLoading ? "Обработка..." : "Сжать PDF"}
+                      <button onClick={handleCompress} disabled={isLoading || !hasAtLeastOnePdf} className="btn btn-primary w-full">
+                        {isLoading ? "Сжатие..." : pdfFilesList.length > 1 ? `Сжать ${pdfFilesList.length} файлов` : "Сжать PDF"}
                       </button>
                     )}
                     {activeTab === "signature" && (
@@ -987,7 +1324,30 @@ export function InstrumentPageClient({ tool }: Props) {
                       </button>
                     )}
                   </div>
+                  <div className="mt-3 flex justify-center">
+                    <UserMemoryUsage />
+                  </div>
                 </div>
+
+                {/* Conversion progress */}
+                {isLoading && conversionProgress && (
+                  <div className="mt-4 p-4 rounded-lg bg-[var(--surface)] border border-[var(--border)]">
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="w-5 h-5 border-2 border-[var(--accent)] border-t-transparent rounded-full animate-spin flex-shrink-0" />
+                      <span className="text-sm font-medium text-[var(--foreground)]">
+                        {conversionProgress.label}
+                      </span>
+                    </div>
+                    {conversionProgress.total > 0 && (
+                      <div className="h-2 bg-[var(--background)] rounded-full overflow-hidden">
+                        <div
+                          className="h-full bg-[var(--accent)] transition-[width] duration-700 ease-out"
+                          style={{ width: `${(conversionProgress.current / conversionProgress.total) * 100}%` }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Status Message */}
                 {statusMessage && (
@@ -1010,30 +1370,72 @@ export function InstrumentPageClient({ tool }: Props) {
                       )}
                     </div>
                     <div className="space-y-2">
-                      {conversionResults.map((result, index) => (
-                        <div key={index} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg">
-                          <div className="flex items-center gap-3 min-w-0">
-                            <div className="w-8 h-8 bg-[var(--background)] rounded flex items-center justify-center text-xs font-medium text-[var(--muted)] flex-shrink-0">
-                              {result.name.split('.').pop()?.toUpperCase()}
+                      {conversionResults.map((result, index) => {
+                        const isImage = result.blob.type.startsWith("image/");
+                        const ext = result.name.split(".").pop()?.toLowerCase() ?? "";
+                        return (
+                          <div key={index} className="flex items-center justify-between p-3 bg-[var(--surface)] rounded-lg gap-3">
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              <div className="w-14 h-14 rounded-lg bg-[var(--background)] flex items-center justify-center overflow-hidden flex-shrink-0">
+                                {isImage ? (
+                                  <img src={result.url} alt="" className="w-full h-full object-cover" />
+                                ) : (
+                                  <FileFormatIcon extension={ext} size="md" />
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <p className="text-sm text-[var(--foreground)] truncate" title={result.name}>{result.name}</p>
+                                <p className="text-xs text-[var(--muted)]">{formatFileSize(result.blob.size)}</p>
+                              </div>
                             </div>
-                            <div className="min-w-0">
-                              <p className="text-sm text-[var(--foreground)] truncate">{result.name}</p>
-                              <p className="text-xs text-[var(--muted)]">{formatFileSize(result.blob.size)}</p>
+                            <div className="flex gap-1 flex-shrink-0">
+                              <button onClick={() => setResultPreviewIndex(index)} className="btn btn-icon-sm btn-ghost" title="Предпросмотр">
+                                <Eye className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost" title="Скачать">
+                                <Download className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => deleteResult(result.url, index)} className="btn btn-icon-sm btn-ghost" title="Удалить">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </div>
-                          <div className="flex gap-1 flex-shrink-0">
-                            <button onClick={() => downloadResult(result.url, result.name)} className="btn btn-icon-sm btn-ghost">
-                              <Download className="w-4 h-4" />
-                            </button>
-                            <button onClick={() => deleteResult(result.url, index)} className="btn btn-icon-sm btn-ghost">
-                              <Trash2 className="w-4 h-4" />
-                            </button>
-                          </div>
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
+
+                {/* Модальное окно предпросмотра результата конвертации */}
+                {resultPreviewIndex != null && conversionResults[resultPreviewIndex] && (() => {
+                  const result = conversionResults[resultPreviewIndex!];
+                  const isPdf = result.blob.type === "application/pdf";
+                  const isImage = result.blob.type.startsWith("image/");
+                  return (
+                    <div
+                      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+                      onClick={() => setResultPreviewIndex(null)}
+                    >
+                      <div className="bg-[var(--background)] rounded-xl shadow-xl max-w-4xl max-h-[90vh] w-full overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+                        <div className="flex items-center justify-between p-3 border-b border-[var(--border)]">
+                          <p className="text-sm font-medium truncate">{result.name}</p>
+                          <button type="button" onClick={() => setResultPreviewIndex(null)} className="p-2 rounded-lg hover:bg-[var(--surface)]">
+                            <X className="w-5 h-5" />
+                          </button>
+                        </div>
+                        <div className="flex-1 overflow-auto p-4 flex items-center justify-center min-h-[200px]">
+                          {isImage ? (
+                            <img src={result.url} alt="" className="max-w-full max-h-[70vh] object-contain rounded" />
+                          ) : isPdf ? (
+                            <iframe src={result.url} title={result.name} className="w-full min-h-[70vh] rounded border-0" style={{ height: "70vh" }} />
+                          ) : (
+                            <p className="text-[var(--muted)]">Предпросмотр недоступен.</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Extracted Text */}
                 {extractedText && extractedText.length > 0 && (
@@ -1042,7 +1444,14 @@ export function InstrumentPageClient({ tool }: Props) {
                       <h3 className="font-medium text-[var(--foreground)]">Текст</h3>
                       <button
                         onClick={() => {
-                          const full = extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n");
+                          const full = extractedText
+                            .map((section) =>
+                              [
+                                `=== ${section.fileName} ===`,
+                                ...section.pages.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`),
+                              ].join("\n\n")
+                            )
+                            .join("\n\n\n");
                           void navigator.clipboard.writeText(full);
                           showStatus("success", "Скопировано", 3000);
                         }}
@@ -1054,7 +1463,14 @@ export function InstrumentPageClient({ tool }: Props) {
                     <textarea
                       readOnly
                       className="w-full h-48 p-3 text-sm font-mono bg-[var(--surface)] rounded-lg resize-none border border-[var(--border)]"
-                      value={extractedText.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`).join("\n\n")}
+                      value={extractedText
+                        .map((section) =>
+                          [
+                            `=== ${section.fileName} ===`,
+                            ...section.pages.map((p) => `--- Страница ${p.pageNum} ---\n${p.text}`),
+                          ].join("\n\n")
+                        )
+                        .join("\n\n\n")}
                     />
                   </div>
                 )}
@@ -1097,10 +1513,12 @@ export function InstrumentPageClient({ tool }: Props) {
               </div>
             </div>
 
-            {/* Sidebar */}
-            <div className="space-y-6">
+            {/* Sidebar — под рабочей зоной */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 lg:gap-8">
               {/* Ad */}
-              <AdPlaceholder size="rectangle" />
+              <div>
+                <AdPlaceholder size="rectangle" />
+              </div>
 
               {/* Related Tools */}
               <div>
@@ -1163,13 +1581,6 @@ export function InstrumentPageClient({ tool }: Props) {
               )}
             </div>
           </div>
-        </div>
-      </section>
-
-      {/* Bottom Ad */}
-      <section className="py-8 px-4 sm:px-6">
-        <div className="max-w-4xl mx-auto">
-          <AdPlaceholder size="banner" />
         </div>
       </section>
     </>

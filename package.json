@@ -2,6 +2,11 @@
   "name": "pdf-lite",
   "version": "0.1.0",
   "private": true,
+  "main": "electron/main.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tomilo/pdf-lite.git"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -9,7 +14,55 @@
     "lint": "eslint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "postinstall": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs 2>/dev/null || true"
+    "postinstall": "cp node_modules/pdfjs-dist/build/pdf.worker.min.mjs public/pdf.worker.min.mjs 2>/dev/null || true",
+    "prepare-standalone": "node scripts/prepare-standalone.js",
+    "electron:dev": "electron .",
+    "electron:build": "npm run build && npm run prepare-standalone && electron-builder",
+    "electron:build:win": "npm run build && npm run prepare-standalone && electron-builder --win",
+    "electron:build:linux": "npm run build && npm run prepare-standalone && electron-builder --linux"
+  },
+  "build": {
+    "appId": "com.pdf-lite.app",
+    "productName": "PDF Lite",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "public/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".next/standalone",
+        "to": "standalone",
+        "filter": ["**/*"]
+      }
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "tomilo",
+      "repo": "pdf-lite",
+      "vPrefixedTagName": true
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "src/app/favicon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerLanguages": ["ru", "en_US"]
+    },
+    "linux": {
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] },
+        { "target": "deb", "arch": ["x64"] }
+      ],
+      "category": "Office"
+    }
   },
   "dependencies": {
     "docx": "^9.5.2",
@@ -20,9 +73,13 @@
     "pdfjs-dist": "^5.4.530",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "xlsx": "^0.18.5"
+    "react-file-icon": "^1.6.0",
+    "xlsx": "^0.18.5",
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "@tailwindcss/postcss": "^4",
     "@types/jszip": "^3.4.0",
     "@types/node": "^20",

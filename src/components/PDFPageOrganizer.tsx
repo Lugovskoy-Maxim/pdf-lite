@@ -16,10 +16,15 @@ export type OrganizerPageItem = {
   previewDataUrl: string | null;
 };
 
+/** Макс. размер файла для серверной обработки (20 МБ) */
+export const MAX_SERVER_FILE_SIZE = 20 * 1024 * 1024;
+
 type Props = {
   pdfFile: File;
   pageCount?: number;
   onChange: (pages: OrganizerPageItem[]) => void;
+  /** Использовать сервер для превью (до 20 МБ). При false — только в браузере. */
+  useServerPreviews?: boolean;
 };
 
 const THUMB_SCALE = 0.24;
@@ -55,12 +60,14 @@ function createSkeletonPages(count: number): OrganizerPageItem[] {
   }));
 }
 
-export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange }: Props) {
+export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange, useServerPreviews = true }: Props) {
   const [pages, setPages] = useState<OrganizerPageItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [previewProgress, setPreviewProgress] = useState({ loaded: 0, total: 0 });
   const lastNotifiedStateRef = useRef("");
+
+  const canUseServer = useServerPreviews && pdfFile.size <= MAX_SERVER_FILE_SIZE;
 
   useEffect(() => {
     let cancelled = false;
@@ -76,11 +83,12 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange }: Props) {
 
     (async () => {
       try {
-        // Сначала пробуем серверную генерацию превью (Python + PyMuPDF)
-        const formData = new FormData();
-        formData.append("file", pdfFile);
-        const apiRes = await fetch("/api/pdf-thumbnails", { method: "POST", body: formData });
-        if (apiRes.ok) {
+        // По желанию — серверная генерация превью (до 20 МБ)
+        if (canUseServer) {
+          const formData = new FormData();
+          formData.append("file", pdfFile);
+          const apiRes = await fetch("/api/pdf-thumbnails", { method: "POST", body: formData });
+          if (apiRes.ok) {
           const data = (await apiRes.json()) as {
             pageCount: number;
             thumbnails: string[];
@@ -103,6 +111,7 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange }: Props) {
           );
           setLoading(false);
           return;
+        }
         }
 
         // Fallback: рендер в браузере через pdfjs-dist
@@ -167,7 +176,7 @@ export function PDFPageOrganizer({ pdfFile, pageCount = 0, onChange }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [pdfFile.name, pdfFile.size, pageCount]);
+  }, [pdfFile.name, pdfFile.size, pageCount, canUseServer]);
 
   useEffect(() => {
     const stateKey = pages

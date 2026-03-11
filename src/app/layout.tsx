@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { DEFAULT_DESCRIPTION, DEFAULT_KEYWORDS, DEFAULT_TITLE, SITE_NAME, getSiteUrl } from "./lib/seo";
+import { ElectronUpdateBanner } from "@/components/ElectronUpdateBanner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -22,6 +23,17 @@ export const metadata: Metadata = {
   description: DEFAULT_DESCRIPTION,
   keywords: DEFAULT_KEYWORDS,
   applicationName: SITE_NAME,
+  icons: {
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon-32x32.png", sizes: "32x32", type: "image/png" },
+    ],
+    apple: "/apple-touch-icon.png",
+    other: [
+      { rel: "icon", url: "/android-chrome-192x192.png", sizes: "192x192", type: "image/png" },
+      { rel: "icon", url: "/android-chrome-512x512.png", sizes: "512x512", type: "image/png" },
+    ],
+  },
   alternates: {
     canonical: "/",
   },
@@ -90,6 +102,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-stone-50 dark:bg-stone-950 text-stone-900 dark:text-stone-100`}
       >
         {children}
+        <ElectronUpdateBanner />
       </body>
     </html>
   );
