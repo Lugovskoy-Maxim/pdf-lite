@@ -7,43 +7,15 @@ export function setPdfWorkerSrc(pdfjsLib: { GlobalWorkerOptions: { workerSrc?: s
   }
 }
 
-// Функция для сжатия PDF
+// Функция для сжатия PDF (все уровни перекодируют страницы в JPEG, чтобы файл не увеличивался)
 export async function compressPDF(file: File, compressionLevel: string): Promise<Blob> {
-  const arrayBuffer = await file.arrayBuffer();
-  const pdfDoc = await PDFDocument.load(arrayBuffer);
-  
-  // Определение настроек сжатия в зависимости от уровня
   const compressionSettings = {
-    low: { quality: 0.8, maxWidth: 2400, maxHeight: 2400, useObjectStreams: true },
+    low: { quality: 0.85, maxWidth: 2400, maxHeight: 2400, useObjectStreams: true },
     medium: { quality: 0.6, maxWidth: 1600, maxHeight: 1600, useObjectStreams: true },
     high: { quality: 0.4, maxWidth: 1200, maxHeight: 1200, useObjectStreams: true },
   };
-  
   const settings = compressionSettings[compressionLevel as keyof typeof compressionSettings] || compressionSettings.medium;
-  
-  // Создание нового PDF с оптимизацией
-  const newPdfDoc = await PDFDocument.create();
-  
-  // Копирование страниц
-  for (let i = 0; i < pdfDoc.getPageCount(); i++) {
-    const [existingPage] = await newPdfDoc.copyPages(pdfDoc, [i]);
-    newPdfDoc.addPage(existingPage);
-  }
-  
-  // Если нужно сжать изображения, используем метод с пересозданием PDF через canvas
-  if (compressionLevel !== 'low') {
-    return await compressPDFWithImages(file, settings);
-  }
-  
-  // Сохранение с сжатием объектов в потоки
-  const compressedPdfBytes = await newPdfDoc.save({
-    useObjectStreams: settings.useObjectStreams,
-    addDefaultPage: false,
-    objectsPerTick: 50,
-    updateFieldAppearances: true,
-  });
-  
-  return new Blob([new Uint8Array(compressedPdfBytes)], { type: 'application/pdf' });
+  return await compressPDFWithImages(file, settings);
 }
 
 // Вспомогательная функция для сжатия PDF с пересозданием через изображения
@@ -125,52 +97,53 @@ async function compressPDFWithImages(file: File, settings: { quality: number; ma
 
 export type ConversionProgressCallback = (current: number, total: number, label?: string) => void;
 
+/** Опции для convertPDFToImages. maxDimension — макс. сторона в пикселях (уменьшает размер PNG/WebP в архиве). */
+export type ConvertPDFToImagesOptions = { maxDimension?: number };
+
 // Функция для конвертации PDF в изображения с использованием pdf.js
 export async function convertPDFToImages(
   file: File,
   format: string,
-  onProgress?: ConversionProgressCallback
+  onProgress?: ConversionProgressCallback,
+  options?: ConvertPDFToImagesOptions
 ): Promise<Blob[]> {
   const images: Blob[] = [];
-  
-  // Проверяем, что мы на клиенте (не на сервере)
+  const maxDimension = options?.maxDimension;
+
   if (typeof window === 'undefined') {
     return images;
   }
-  
+
   try {
-    // Динамический импорт pdf.js для избежания проблем SSR
     const pdfjsLib = await import('pdfjs-dist');
     setPdfWorkerSrc(pdfjsLib);
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer } as any).promise;
     const total = pdf.numPages;
-    
-    // Обрабатываем каждую страницу
+
     for (let pageNum = 1; pageNum <= total; pageNum++) {
       onProgress?.(pageNum, total, `Страница ${pageNum} из ${total}`);
       const page = await pdf.getPage(pageNum);
-      const viewport = page.getViewport({ scale: 2 }); // Масштаб 2 для лучшего качества
-      
-      // Создаем canvas для рендеринга страницы
+      const baseViewport = page.getViewport({ scale: 1 });
+      let scale = 2;
+      if (maxDimension && (baseViewport.width > maxDimension || baseViewport.height > maxDimension)) {
+        scale = maxDimension / Math.max(baseViewport.width, baseViewport.height);
+      }
+      const viewport = page.getViewport({ scale });
+
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
-      
-      if (!ctx) {
-        continue;
-      }
-      
+      if (!ctx) continue;
+
       canvas.width = viewport.width;
       canvas.height = viewport.height;
-      
-      // Рендерим страницу PDF на canvas
+
       await page.render({
         canvasContext: ctx,
-        viewport: viewport,
-        canvas: canvas,
+        viewport,
+        canvas,
       }).promise;
-      
-      // Конвертируем в нужный формат (JPG, PNG, WebP)
+
       const mimeMap: Record<string, string> = {
         JPG: 'image/jpeg',
         PNG: 'image/png',
@@ -178,21 +151,17 @@ export async function convertPDFToImages(
       };
       const mime = mimeMap[format] || 'image/png';
       const quality = format === 'JPG' ? 0.9 : undefined;
-      const blobPromise = new Promise<Blob | null>((resolve) => {
+      const blob = await new Promise<Blob | null>((resolve) => {
         canvas.toBlob(resolve, mime, quality);
       });
-      
-      const blob = await blobPromise;
-      if (blob) {
-        images.push(blob);
-      }
+      if (blob) images.push(blob);
     }
     onProgress?.(total, total, "Готово");
   } catch (error) {
     console.error('Ошибка при конвертации PDF в изображения:', error);
     throw error;
   }
-  
+
   return images;
 }
 

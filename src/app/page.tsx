@@ -630,40 +630,19 @@ export function PDFToolsContent({ forcedTool, forcedStandalone = false }: PDFToo
     setIsLoading(true);
     setStatusMessage({ type: "success", text: "Создание архива(ов)..." });
     try {
-      if (pdfFilesList.length === 1) {
-        const pdfFile = pdfFilesList[0];
-        const images = await convertPDFToImages(pdfFile, format);
-        const items = images.map((blob, i) => ({ blob, name: `page-${i + 1}.${ext}` }));
+      const results: { blob: Blob; url: string; name: string }[] = [];
+      const total = pdfFilesList.length;
+      for (let i = 0; i < total; i++) {
+        const pdfFile = pdfFilesList[i];
+        if (total > 1) setStatusMessage({ type: "success", text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
+        const images = await convertPDFToImages(pdfFile, format, undefined, { maxDimension: 1600 });
+        const items = images.map((blob, p) => ({ blob, name: `page-${p + 1}.${ext}` }));
         const zipBlob = await createZipFromImages(items);
-        const url = URL.createObjectURL(zipBlob);
         const baseName = pdfFile.name.replace(/\.pdf$/i, "");
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${baseName}-pages.zip`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showStatus("success", `Архив со ${images.length} страниц(ой) скачан`, 5000);
-      } else {
-        const results: { blob: Blob; url: string; name: string }[] = [];
-        const total = pdfFilesList.length;
-        for (let i = 0; i < total; i++) {
-          const pdfFile = pdfFilesList[i];
-          setStatusMessage({ type: "success", text: `Файл ${i + 1} из ${total}: ${pdfFile.name}` });
-          const images = await convertPDFToImages(pdfFile, format);
-          const items = images.map((blob, p) => ({ blob, name: `page-${p + 1}.${ext}` }));
-          const zipBlob = await createZipFromImages(items);
-          const baseName = pdfFile.name.replace(/\.pdf$/i, "");
-          results.push({
-            blob: zipBlob,
-            url: URL.createObjectURL(zipBlob),
-            name: `${baseName}-pages.zip`,
-          });
-        }
-        replaceConversionResults(results);
-        showStatus("success", `Готово: ${total} архивов`, 5000);
+        results.push({ blob: zipBlob, url: URL.createObjectURL(zipBlob), name: `${baseName}-pages.zip` });
       }
+      replaceConversionResults(results);
+      showStatus("success", results.length > 1 ? `Готово: ${results.length} архивов` : "Готово", 5000);
     } catch (error) {
       showStatus("error", "Ошибка: " + (error as Error).message);
     } finally {
